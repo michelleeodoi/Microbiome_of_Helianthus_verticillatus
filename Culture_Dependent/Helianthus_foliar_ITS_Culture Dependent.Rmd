@@ -1,0 +1,530 @@
+---
+title: "Helianthus_foliar_ITS_Culture Dependent"
+author: "Michelle Esther Odoi"
+date: "2025-05-27"
+output: rmdformats::downcute
+editor_options: 
+  chunk_output_type: console
+---
+
+# Sequence Processing Using the sangeranalyseR pipeline
+
+# Load required libraries
+
+```{r, message=FALSE}
+library(devtools)
+library(sangeranalyseR)
+library(shiny)
+```
+
+# Import raw ab1 files from all study site
+
+```{r, eval=FALSE}
+
+inputFilesPath1<- file.path("/Users/modoi/Library/CloudStorage/OneDrive-UniversityofTennessee/Projects/Helianthus_verticillatus/Objective5_Microbiome/Microbiome_Culture_Dependent/Raw_Sequences/all_plot/")
+
+
+my_sangerAlignment_2 <- SangerAlignment(inputSource          = "ABIF",
+                                      processMethod        = "REGEX",
+                                      ABIF_Directory       = inputFilesPath1,
+                                      REGEX_SuffixForward  = "[A-Z]*_ITS1_.+ab1$",
+                                      REGEX_SuffixReverse  = "[A-Z]*_ITS4_.+ab1$",
+                                        TrimmingMethod        = "M2",
+                                M1TrimmingCutoff      = NULL,
+                                M2CutoffQualityScore  = 40,
+                                M2SlidingWindowSize   = 10,
+                                baseNumPerRow         = 100,
+                                heightPerRow          = 200,
+                                signalRatioCutoff     = 0.33,
+                                showTrimmed           = TRUE,
+                      
+                                      minReadsNum          = 2,
+                                      minReadLength        = 20,
+                                      minFractionCall      = 0.5,
+                                      maxFractionLost      = 0.5,
+                                      processorsNum        = 2)
+
+my_sangerAlignment_2
+its1and4_trimmed_table <- my_sangerAlignment_2@objectResults@readResultTable
+write.table(its1and4_trimmed_table,"/Users/modoi/Library/CloudStorage/OneDrive-UniversityofTennessee/Projects/Helianthus_verticillatus/Objective5_Microbiome/Microbiome_Culture_Dependent/Trimmed_Sequences/all_plot/its1and4_trimmed_table.txt",sep='\t',row.names=TRUE,col.names=TRUE)
+
+launchApp(my_sangerAlignment_2)
+ writeFasta(my_sangerAlignment_2,
+            outputDir         = "/Users/modoi/Library/CloudStorage/OneDrive-UniversityofTennessee/Projects/Helianthus_verticillatus/Objective5_Microbiome/Microbiome_Culture_Dependent/Trimmed_Sequences/all_plot/all_plot",
+            compress          = F,
+           compression_level = NA,
+          selection         = "all")
+ 
+
+generateReport(my_sangerAlignment_2,
+               outputDir           = "/Users/modoi/Library/CloudStorage/OneDrive-UniversityofTennessee/Projects/Helianthus_verticillatus/Objective5_Microbiome/Microbiome_Culture_Dependent/Trimmed_Sequences/all_plot/all_plot/",
+               includeSangerRead   = TRUE,
+               includeSangerContig = TRUE)
+
+```
+
+
+# Mothur Sequence Processing
+
+```{r, eval=FALSE}
+# Check the summary of quality of concensus sequences with the code summary.seqs (fasta=input.fa)
+summary.seqs(fasta=Hv_allplots_contigs.fa)
+
+# Remove low quality reads 
+screen.seqs(fasta=Hv_allplots_contigs.fa, maxambig=1)
+
+# Make a count table
+make.count(fasta=Hv_allplots_contigs.good.fa, groups=1)
+
+# Classify Sequences
+##Use the classify.seqs() command to assign taxonomy at a threshold of 97 similarities with the reference genome UNITE citation: https://doi.plutof.ut.ee/doi/10.15156/BIO/3301233
+classify.seqs(fasta=Hv_allplots_contigs.good.fa, count=Hv_allplots_contigs.good.count_table, reference=UNITEv10_sh_99_May27_2025.fasta, taxonomy=UNITEv10_sh_99_May27_2025.tax, cutoff=97, processors=16)
+
+# Pairwise calculation
+
+pairwise.seqs(fasta=Hv_allplots_contigs.good.fa, cutoff=0.03, countends=F, processors=16)
+
+# OTU Clustering
+cluster(column=Hv_allplots_contigs.good.dist, count=Hv_allplots_contigs.good.count_table, cutoff=0.03)
+
+
+# OTU Classification
+classify.otu(list=Hv_allplots_contigs.good.opti_mcc.list, taxonomy=Hv_allplots_contigs.good.UNITEv10_sh_99_May27_2025.wang.taxonomy, count=Hv_allplots_contigs.good.count_table, threshold=97)
+
+# Make OTU Table
+
+make.shared(list=Hv_allplots_contigs.good.opti_mcc.list, count=Hv_allplots_contigs.good.count_table)
+
+```
+
+# Load required libraries
+```{r, message=FALSE}
+library(tidyverse)
+library(readr)
+library(stringr)
+library(tidyr)
+library(plyr)
+library(vegan)
+library(ggpubr)
+library(dplyr)
+library(data.table)
+library(reshape)
+
+```
+
+
+# Load OTU table
+```{r}
+# Read the .opti_mcc.list file 
+hv_file_path <- 
+"/Users/frostken/Library/CloudStorage/OneDrive-OregonStateUniversity/Projects/PhD_Publication/Microbiome/New_Phytologist/New_phytologist_script/Culture_Dependent/Funguild/Hv_allplots_contigs.good.opti_mcc.list"
+
+hv_otu_list <- read.delim(hv_file_path, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+
+# Convert wide format OTUs into long format
+hv_otu_long_data <- hv_otu_list %>%
+  pivot_longer(cols = starts_with("Otu"),
+               names_to = "OTU",
+               values_to = "Sample_ID") %>%
+  separate_rows(Sample_ID, sep = ",") %>%
+  filter(Sample_ID != "") %>%
+  select(OTU, Sample_ID)
+
+
+#Convert to a dataframe
+
+hv_otu_long_data<-as.data.frame(hv_otu_long_data)
+
+hv_otu_long_data_table_count<-hv_otu_long_data%>%
+  group_by(Sample_ID)%>%
+  dplyr::count(OTU)
+
+#reshape the dataframe to a wide formate
+otu_hv_lf_its_table_count_wide<-spread(hv_otu_long_data_table_count,OTU,n)
+
+otu_hv_lf_its_table_count_wide[is.na(otu_hv_lf_its_table_count_wide)]<-0
+
+rowSums(otu_hv_lf_its_table_count_wide[,2:length(otu_hv_lf_its_table_count_wide)])
+
+otu_hv_lf_its_table_count_wide<-as.data.frame(otu_hv_lf_its_table_count_wide)
+
+# Check the row and column name for the OTU table
+rownames(otu_hv_lf_its_table_count_wide)
+
+# Make sample_id rownames 
+row.names(otu_hv_lf_its_table_count_wide)<-make.names(otu_hv_lf_its_table_count_wide$Sample_ID)
+
+#Transpose the OTU table from the column 2, excluding the column 1 (i.e., Sample_ID) 
+t_hv_lf_its_table_count_otu<-as.data.frame(t(otu_hv_lf_its_table_count_wide[,2:length(otu_hv_lf_its_table_count_wide)]))
+
+# Check the row and column name for the OTU table
+rownames(t_hv_lf_its_table_count_otu)
+
+
+# Add the name otu labels to  column 1 of the transposed OTU table 
+t_hv_lf_its_table_count_otu_2<-data.frame(OTU=labels(t_hv_lf_its_table_count_otu)[[1]],t_hv_lf_its_table_count_otu)
+```
+
+# Load taxonomy table and meta data
+```{r}
+met_helianthus_leaf_its<-read.table("Culture_dependent_its_metadata.csv",header=TRUE,sep=',')
+# Read the taxonomy file
+
+hv_lf_its_taxonomy_tab <- read_tsv("Hv_allplots_contigs.good.opti_mcc.0.03.cons.taxonomy")
+
+# Convert the table into a dataframe
+hv_lf_its_taxonomy_tab<-as.data.frame(hv_lf_its_taxonomy_tab)
+
+# Make OTU rownames
+row.names(hv_lf_its_taxonomy_tab)<-make.names(hv_lf_its_taxonomy_tab$OTU)
+
+## Remove column 2 (Size) from the taxonomy table 
+hv_lf_its_taxonomy_tab<-hv_lf_its_taxonomy_tab[,-2]
+
+colnames(t_hv_lf_its_table_count_otu_2)
+```
+
+# Merge the formatted OTU and taxonomy table to be used for the FUNGuild analysis
+```{r}
+
+# Merge the OTU and taxonomy table
+
+helianthus_leaf_otutab_taxonomy<-merge(t_hv_lf_its_table_count_otu_2,hv_lf_its_taxonomy_tab, by="OTU")
+
+row.names(helianthus_leaf_otutab_taxonomy)<-make.names(helianthus_leaf_otutab_taxonomy$OTU)
+
+write.table(helianthus_leaf_otutab_taxonomy, "helianthus_leaf_otutab_taxonomy.txt", sep="\t", row.names=F, quote = F)
+```
+
+# Calculate the relative abundance
+
+```{r}
+
+# Reformat the Taxonomy String
+helianthus_leaf_otutab_taxonomy_clean <- helianthus_leaf_otutab_taxonomy%>%
+mutate(Taxonomy=str_replace_all(string=Taxonomy, pattern="\\(\\d*\\)", replacement=""))%>%
+mutate(Taxonomy=str_replace_all(string=Taxonomy, pattern=";$", replacement=""))%>% 
+mutate(Taxonomy=str_replace_all(string=Taxonomy, pattern="[kpocfgs]\\__", replacement="")) %>%
+mutate(Taxonomy=str_replace_all(string=Taxonomy, pattern="_unclassified", replacement=""))%>%
+separate(Taxonomy, into=c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species"), sep=";")
+
+
+helianthus_leaf_otutab_taxonomy_phylum<-helianthus_leaf_otutab_taxonomy_clean[,c(2:303,305)]
+
+# Calculating col wise sums by phylum
+helianthus_leaf_otutab_taxonomy_phy_sum<-ddply(helianthus_leaf_otutab_taxonomy_phylum,.(Phylum),colwise(sum))
+
+# Making Phyla the Row Names
+row.names(helianthus_leaf_otutab_taxonomy_phy_sum)<-helianthus_leaf_otutab_taxonomy_phy_sum$Phylum
+
+# Removing duplicate column
+helianthus_leaf_otutab_taxonomy_phy_sum$Phylum<-NULL
+
+# Transposing and merging in metadata
+helianthus_leaf_otutab_taxonomy_phy_sum_meta<-merge(met_helianthus_leaf_its,as.data.frame(t(helianthus_leaf_otutab_taxonomy_phy_sum)),by.x="Sample_ID",by.y=0)
+
+# Calculating col wise sums by site
+helianthus_leaf_otutab_taxonomy_phy_site_sum<-ddply(helianthus_leaf_otutab_taxonomy_phy_sum_meta[,2:length(helianthus_leaf_otutab_taxonomy_phy_sum_meta)],.(site),numcolwise(sum))
+
+# Changing row names to site name. 
+row.names(helianthus_leaf_otutab_taxonomy_phy_site_sum)<-helianthus_leaf_otutab_taxonomy_phy_site_sum$site
+
+# Removing duplicate column.
+helianthus_leaf_otutab_taxonomy_phy_site_sum$site<-NULL
+
+
+# Calculating relative abundance
+helianthus_leaf_otutab_taxonomy_phy_site_relabund<-decostand(helianthus_leaf_otutab_taxonomy_phy_site_sum,method = "total")
+
+
+# Converting to long format
+helianthus_leaf_otutab_taxonomy_phy_site_relabund<-tibble::rownames_to_column(helianthus_leaf_otutab_taxonomy_phy_site_relabund,"site")
+helianthus_leaf_otutab_taxonomy_phy_site_relabund_long<-gather(helianthus_leaf_otutab_taxonomy_phy_site_relabund,phylum,relative_abundance,2:length(helianthus_leaf_otutab_taxonomy_phy_site_relabund),factor_key = TRUE,)
+
+# Plotting bar charts with ggplot
+hv_taxrel_phyl<-ggplot(helianthus_leaf_otutab_taxonomy_phy_site_relabund_long, aes(x=site, y=relative_abundance, fill=phylum))+
+  geom_bar(stat="identity", show.legend=TRUE, color="black")+
+  xlab("Site") +
+  ylab("Relative Abundance") +
+scale_fill_manual(values = c( "#F9948E","#700696")) +
+ theme_classic()+
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.text.x = element_text(size = 14), axis.ticks.x = element_blank(), axis.text.y = element_text(size = 14), axis.line.y.left = element_line(), axis.title.y = element_text(size = 14))+
+    guides(fill=guide_legend(title="Phylum"))+
+  scale_y_continuous(breaks=c(0.0,0.25,0.50,0.75,1.0))+
+     theme(axis.text = element_text(face="bold"),
+  axis.title = element_text(face="bold"),legend.text=element_text(size=15),legend.title=element_text(size=15))
+hv_taxrel_phyl
+
+
+
+#Class
+helianthus_leaf_otutab_taxonomy_class<-helianthus_leaf_otutab_taxonomy_clean[,c(2:303,306)]
+
+# Calculating col wise sums by phylum
+helianthus_leaf_otutab_taxonomy_class_sum<-ddply(helianthus_leaf_otutab_taxonomy_class,.(Class),colwise(sum))
+
+# Making Phyla the Row Names
+row.names(helianthus_leaf_otutab_taxonomy_class_sum)<-helianthus_leaf_otutab_taxonomy_class_sum$Class
+
+# Removing duplicate column
+helianthus_leaf_otutab_taxonomy_class_sum$Class<-NULL
+
+# Transposing and merging in metadata
+helianthus_leaf_otutab_taxonomy_class_sum_meta<-merge(met_helianthus_leaf_its,as.data.frame(t(helianthus_leaf_otutab_taxonomy_class_sum)),by.x="Sample_ID",by.y=0)
+
+# Calculating col wise sums by site
+helianthus_leaf_otutab_taxonomy_class_site_sum<-ddply(helianthus_leaf_otutab_taxonomy_class_sum_meta[,2:length(helianthus_leaf_otutab_taxonomy_class_sum_meta)],.(site),numcolwise(sum))
+
+# Changing row names to site name. 
+row.names(helianthus_leaf_otutab_taxonomy_class_site_sum)<-helianthus_leaf_otutab_taxonomy_class_site_sum$site
+
+# Removing duplicate column.
+helianthus_leaf_otutab_taxonomy_class_site_sum$site<-NULL
+
+
+# Calculating relative abundance
+helianthus_leaf_otutab_taxonomy_class_site_relabund<-decostand(helianthus_leaf_otutab_taxonomy_class_site_sum,method = "total")
+
+
+# Converting to long format
+helianthus_leaf_otutab_taxonomy_class_site_relabund<-tibble::rownames_to_column(helianthus_leaf_otutab_taxonomy_class_site_relabund,"site")
+helianthus_leaf_otutab_taxonomy_class_site_relabund_long<-gather(helianthus_leaf_otutab_taxonomy_class_site_relabund,class,relative_abundance,2:length(helianthus_leaf_otutab_taxonomy_class_site_relabund),factor_key = TRUE,)
+
+# Plotting bar charts with ggplot
+hv_taxrel_class<-ggplot(helianthus_leaf_otutab_taxonomy_class_site_relabund_long, aes(x=site, y=relative_abundance, fill=class))+
+  geom_bar(stat="identity", show.legend=TRUE, color="black")+
+  xlab("Site") +
+  ylab("Relative Abundance") +
+scale_fill_manual(values = c("#E8B784","#17becf",'#99CC00')) +
+ theme_classic()+
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.text.x = element_text(size = 14), axis.ticks.x = element_blank(), axis.text.y = element_text(size = 14), axis.line.y.left = element_line(), axis.title.y = element_text(size = 14))+
+    guides(fill=guide_legend(title="Class"))+
+  scale_y_continuous(breaks=c(0.0,0.25,0.50,0.75,1.0))+
+     theme(axis.text = element_text(face="bold"),
+  axis.title = element_text(face="bold"),legend.text=element_text(size=15),legend.title=element_text(size=15))
+hv_taxrel_class
+
+
+#Genus
+helianthus_leaf_otutab_taxonomy_genus<-helianthus_leaf_otutab_taxonomy_clean[,c(2:303,309)]
+
+# Calculating col wise sums by phylum
+helianthus_leaf_otutab_taxonomy_genus_sum<-ddply(helianthus_leaf_otutab_taxonomy_genus,.(Genus),colwise(sum))
+
+# Making Phyla the Row Names
+row.names(helianthus_leaf_otutab_taxonomy_genus_sum)<-helianthus_leaf_otutab_taxonomy_genus_sum$Genus
+
+# Removing duplicate column
+helianthus_leaf_otutab_taxonomy_genus_sum$Genus<-NULL
+
+# Transposing and merging in metadata
+helianthus_leaf_otutab_taxonomy_genus_sum_meta<-merge(met_helianthus_leaf_its,as.data.frame(t(helianthus_leaf_otutab_taxonomy_genus_sum)),by.x="Sample_ID",by.y=0)
+
+# Calculating col wise sums by site
+helianthus_leaf_otutab_taxonomy_genus_site_sum<-ddply(helianthus_leaf_otutab_taxonomy_genus_sum_meta[,2:length(helianthus_leaf_otutab_taxonomy_genus_sum_meta)],.(site),numcolwise(sum))
+
+# Changing row names to site name. 
+row.names(helianthus_leaf_otutab_taxonomy_genus_site_sum)<-helianthus_leaf_otutab_taxonomy_genus_site_sum$site
+
+# Removing duplicate column.
+helianthus_leaf_otutab_taxonomy_genus_site_sum$site<-NULL
+
+
+# Calculating relative abundance
+helianthus_leaf_otutab_taxonomy_genus_site_relabund<-decostand(helianthus_leaf_otutab_taxonomy_genus_site_sum,method = "total")
+
+
+# Converting to long format
+helianthus_leaf_otutab_taxonomy_genus_site_relabund<-tibble::rownames_to_column(helianthus_leaf_otutab_taxonomy_genus_site_relabund,"site")
+helianthus_leaf_otutab_taxonomy_genus_site_relabund_long<-gather(helianthus_leaf_otutab_taxonomy_genus_site_relabund,genus,relative_abundance,2:length(helianthus_leaf_otutab_taxonomy_genus_site_relabund),factor_key = TRUE,)
+
+
+helianthus_leaf_otutab_taxonomy_genus_site_relabund_long$genus<-sub("\\b\\w*ceae\\b","Unassigned",helianthus_leaf_otutab_taxonomy_genus_site_relabund_long$genus,) 
+
+
+helianthus_leaf_otutab_taxonomy_genus_site_relabund_long$genus<-sub("\\b\\w*les\\b","Unassigned",helianthus_leaf_otutab_taxonomy_genus_site_relabund_long$genus,) 
+
+
+subset(helianthus_leaf_otutab_taxonomy_genus_site_relabund_long, genus=="Unassigned")
+
+subset(helianthus_leaf_otutab_taxonomy_genus_site_relabund_long, genus=="unclassified")
+
+# Remove "unclassified" and "Unassigned" information
+leaf_helianthus_genus_filtered <- helianthus_leaf_otutab_taxonomy_genus_site_relabund_long %>%
+  filter(!genus %in% c("Unassigned", "unclassified"))
+
+
+# Normalize relative abundance so total per site = 1
+leaf_helianthus_genus_relabund_normalized <- leaf_helianthus_genus_filtered %>%
+  group_by(site) %>%
+  mutate(relative_abundance = relative_abundance / sum(relative_abundance)) %>%
+  ungroup()
+
+# Plotting bar charts with ggplot
+hv_taxrel_genus<-ggplot(leaf_helianthus_genus_relabund_normalized, aes(x=site, y=relative_abundance, fill=genus))+
+  geom_bar(stat="identity", show.legend=TRUE, color="black")+
+  xlab("Site") +
+  ylab("Relative Abundance") +
+scale_fill_manual(values = c('#999999','#FF3399','#006600','#FF6633','#CCFFFF','#6600cc','#99CC00','#FFCCFF',"#FDB462",'#CCFF33','#FF0033','#666600','#CCFFFF','#3399FF','#993366','#00FFFF','#333FFF','#FFFF00',"#F9948E",'#330066','#99FF99','#003300','#CC33FF','#CC99FF','#CC0066','#993333','#CC6600','#006600','#99CC00','#33FF00','#CCFF33','#99FF99','#3399FF','#333FFF','#000099','#330066','#CC99FF','#003300','#006600','#666600','#99CC00','#33FF00','#CCFF33','#99FF99','#666600','#FF66FF')) +
+ theme_classic()+
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.text.x = element_text(size = 14), axis.ticks.x = element_blank(), axis.text.y = element_text(size = 14), axis.line.y.left = element_line(), axis.title.y = element_text(size = 14))+
+    guides(fill=guide_legend(title="Genus"))+
+  scale_y_continuous(breaks=c(0.0,0.25,0.50,0.75,1.0))+
+     theme(axis.text = element_text(face="bold"),
+  axis.title = element_text(face="bold"),legend.text=element_text(size=15),legend.title=element_text(size=15))
+hv_taxrel_genus
+```
+
+
+
+# Funguild Assignments Import
+
+Open a terminal
+Change directory to the folder that contains the merged formatted OTU and taxonomy table
+Ensure the .py script eg Guilds_v1.1.py is in the same folder that contains the merged formatted OTU and taxonomy table
+Run the code below as
+
+```{r, eval=FALSE}
+python Guilds_v1.1.py -otu helianthus_leaf_otutab_taxonomy.txt -db fungi -m -u
+```
+
+## Import the functional guild table 
+
+```{r}
+helianthus_leaf_funguild<-read.delim("helianthus_leaf_otutab_taxonomy.guilds_matched.txt",header=TRUE,sep="\t",fill=TRUE, ,strip.white=TRUE)
+
+# Remove columns containing citation information with na.omit. 
+helianthus_leaf_funguild<-na.omit(helianthus_leaf_funguild)
+
+
+#First select only the OTU section from the output
+helianthus_lf_otu_id<-helianthus_leaf_funguild[,1]
+#select only the Guild section from the output
+helianthus_lf_guild_id<-helianthus_leaf_funguild[,308]
+#Select from first sample to last sample
+helianthus_lf_otutab <- (helianthus_leaf_funguild[,2:303])
+
+
+# Create the data frame that includes just the functional guild information
+helianthus_lf_otutab_guild<-data.frame(otu=helianthus_lf_otu_id,Guilds=helianthus_lf_guild_id,helianthus_lf_otutab)
+
+helianthus_leaf_funguild_sum_dh <-rowSums(helianthus_leaf_funguild[,2:82])
+helianthus_leaf_funguild_sum_rt <-rowSums(helianthus_leaf_funguild[,83:188])
+helianthus_leaf_funguild_sum_sb <-rowSums(helianthus_leaf_funguild[,189:303])
+
+# Combine guild information for each site
+helianthus_leaf_sum_exp<-as.data.frame(cbind(helianthus_leaf_funguild_sum_dh,helianthus_leaf_funguild_sum_rt,helianthus_leaf_funguild_sum_sb))
+
+# Make a new column "taxon" for the datafram helianthus_leaf_sum_exp that contains taxonomic informqtion from the Taxon in the dataframe helianthus_leaf_funguild  
+helianthus_leaf_sum_exp$taxon <- helianthus_leaf_funguild$Taxon
+# Make a new column "taxonomy" for the datafram helianthus_leaf_sum_exp that contains taxonomic informqtion from the taxonomy in the dataframe helianthus_leaf_funguild
+helianthus_leaf_sum_exp$taxonomy <- helianthus_leaf_funguild$Taxonomy
+# Make a new column "guild" for the datafram helianthus_leaf_sum_exp that contains taxonomic informqtion from the Guild in the dataframe helianthus_leaf_funguild
+helianthus_leaf_sum_exp$guild <- helianthus_leaf_funguild$Guild
+
+#Use the stringr package to quantify the number of "-" in the guild names. 
+
+#To weight each value, divide the total count by the number of dashes plus 1. One (1) is added, because a name with only 1 dash will have two functional guilds. 
+
+#NB: In the helianthus_lf_otutab_guild dataframe:
+#column 1=otu
+#column 2=Guilds
+##column 3= is the beginning of matrix
+
+
+helianthus_otutab_guild_div<-data.frame(Guilds=helianthus_lf_guild_id,(helianthus_lf_otutab_guild[,3:length(helianthus_lf_otutab_guild)]/(str_count(helianthus_lf_otutab_guild$Guilds,pattern="-")+1)))
+
+
+#Use the separate_rows to split the functional guild names by dash and create duplicate columns. 
+
+helianthus_otutab_guild_div_sep<-separate_rows(helianthus_otutab_guild_div, Guilds, sep="-")
+
+
+#Remove the pipe symbols (|) from some of the Guild names
+helianthus_otutab_guild_div_sep$Guilds<-gsub("\\|", "", helianthus_otutab_guild_div_sep$Guilds)
+
+#Use ddply to sum  the data by functional guild and then by site. 
+helianthus_otutab_guild_div_sep_sum<-as.data.frame(ddply(helianthus_otutab_guild_div_sep, .(Guilds),colwise(sum)))
+
+rownames(helianthus_otutab_guild_div_sep_sum)
+colnames(helianthus_otutab_guild_div_sep_sum)
+
+#Make the row name the functional guild
+rownames(helianthus_otutab_guild_div_sep_sum)<-make.names(helianthus_otutab_guild_div_sep_sum$Guilds)
+
+#Transpose the helianthus_otutab_guild_div_sep_sum table
+
+otutab_guild_div_sep_sum<-t(helianthus_otutab_guild_div_sep_sum[,2:length(helianthus_otutab_guild_div_sep_sum)])
+
+# Extract first part before first underscore as site information
+otutab_guild_div_sep_sum <- as.data.frame(otutab_guild_div_sep_sum)
+
+otutab_guild_div_sep_sum<-rownames_to_column(otutab_guild_div_sep_sum, var = "Sample_ID")
+  
+otutab_guild_div_sep_sum$site <- sub("_.*", "", otutab_guild_div_sep_sum$Sample_ID)
+
+otutab_guild_div_sep_sum_site<-data.frame(otutab_guild_div_sep_sum)
+
+otutab_guild_div_sep_sum_sitesum<-(ddply(otutab_guild_div_sep_sum_site, .(site),numcolwise(sum)))
+
+row.names(otutab_guild_div_sep_sum_sitesum)<-make.names(otutab_guild_div_sep_sum_sitesum$site)
+
+```
+
+# Funguild Relative Abundance
+
+```{r}
+# Calculate the relative abundance of each functional guild with unassigned included.
+funguild_relabund_other<-decostand(otutab_guild_div_sep_sum_sitesum[,2:length(otutab_guild_div_sep_sum_sitesum)],method="total")
+
+funguild_relabund_other<-data.frame(site=otutab_guild_div_sep_sum_sitesum$site,funguild_relabund_other)
+
+# Remove the period from Guild names
+names(funguild_relabund_other) <- gsub("\\.", " ", names(funguild_relabund_other))
+
+
+# Then I calculate the relative abundance of each functional guild. 
+funguild_relabund<-decostand(otutab_guild_div_sep_sum_sitesum[,2:8],method="total")
+funguild_relabund<-data.frame(site=otutab_guild_div_sep_sum_sitesum$site,funguild_relabund)
+
+# Remove the period from Guild names
+names(funguild_relabund) <- gsub("\\.", " ", names(funguild_relabund))
+```
+
+# Visualize the relative abundance
+
+```{r}
+#Input guild data
+
+#Convert to stacked bar plot format using the melt fucntion from the data.table package.
+
+funguild_melt_other<-melt(funguild_relabund_other, id.vars="site", variable="Guild")
+
+#Plot in ggplot
+funguild_other<-ggplot(funguild_melt_other, aes(x=site, y=value, fill=Guild))+
+  geom_bar(stat="identity", color="black" ,show.legend=TRUE)+
+   scale_fill_manual(values=c('#999999','#FF3399','#666600','#FF6633','#CCFFFF','#6600cc','#99CC00','#FFCCFF','#FFFF00','#993366','#99FF99','#CCFFFF','#00FFFF','#66CCCC','#3399FF','#333FFF','#006699','#000099','#330066','#6600cc','#9900CC','#CC33FF','#CC99FF','#FF66FF','#CC0066','#993366','#993333','#CC6600','#006600','#99CC00','#33FF00','#CCFF33','#99FF99','#3399FF','#333FFF','#000099','#330066','#CC99FF','#003300','#006600','#666600','#99CC00','#33FF00','#CCFF33','#99FF99','#666600','#006600' ))+
+xlab("Site") +
+  ylab("Relative Abundance") +
+ theme_classic()+
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.text.x = element_text(size = 14), axis.ticks.x = element_blank(), axis.text.y = element_text(size = 14), axis.line.y.left = element_line(), axis.title.y = element_text(size = 14))+
+    guides(fill=guide_legend(title="Guild"))+
+  scale_y_continuous(breaks=c(0.0,0.25,0.50,0.75,1.0))+
+     theme(axis.text = element_text(face="bold"),
+  axis.title = element_text(face="bold"),legend.text=element_text(size=15),legend.title=element_text(size=15))
+funguild_other
+```
+
+
+# Arranging the plots for publication 
+
+```{r}
+relabund_phylum_class<-ggarrange(hv_taxrel_phyl, hv_taxrel_class, nrow=2, ncol=1, common.legend=F, legend="right", labels = c("A","B"), font.label = list(size = 15))
+ggsave("relabund_phylum_class.png", plot = relabund_phylum_class, dpi = 300, width = 12, height = 10)
+
+relabund_genus_FUNGuild<-ggarrange(hv_taxrel_genus, funguild_other, nrow=2, ncol=1, common.legend=F, legend="right", labels = c("A","B"), font.label = list(size = 15))
+
+ggsave("relabund_genus_FUNGuild.png", plot = relabund_genus_FUNGuild, dpi = 300, width = 12, height = 10)
+```
+
+
