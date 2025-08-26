@@ -1,0 +1,1538 @@
+---
+title: "helianthus_V4_sequence_processing"
+author: "Aaron Onufrak"
+date: "2023-07-03"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Code Summary
+
+The following code is used to process the *Helianthus 16S* data. Data received by novogene was oddly split so that a single sample was split into multiple forward and reverse files. Prior to the start of this code, data was concatenated by sample ID and read direction. Scripts for that are located in **/Volumes/non_dissertation_projects/odoi_projects/bacteria_v4_data**. The following steps are performed in this code:
+
+1. Remove ambiguous bases
+2. Remove adapters and primers
+3. Quality filter reads
+
+```{r, warning=FALSE, message=FALSE}
+library(dada2)
+library(Biostrings)
+library(ShortRead)
+library(reticulate)
+```
+
+# Step 1: Data import and initial quality assessment
+
+```{r,message=FALSE, warning=FALSE}
+# Path to all original sequence files
+helianthus_bac_path<-"/Volumes/non_dissertation_projects/odoi_projects/bacteria_v4_data/analyses_v4/raw_data_concat"
+
+# Then create objects for the forward and reverse reads
+forward_reads_bac_helianthus<-sort(list.files(helianthus_bac_path, pattern=".r1.fq.gz|P[0-9].b.raw_1.fq.gz|Negative_b.raw_1.fq.gz",full.names=TRUE))
+
+reverse_reads_bac_helianthus<-sort(list.files(helianthus_bac_path, pattern=".r2.fq.gz|P[0-9].b.raw_2.fq.gz|Negative_b.raw_2.fq.gz",full.names=TRUE))
+
+# Check number of forward and reverse files. Should be an equal number of forward and reverse files. 
+length(forward_reads_bac_helianthus)
+length(reverse_reads_bac_helianthus)
+
+# Generate quality plots to assess read quality
+forward_qual_profile_raw<-plotQualityProfile(forward_reads_bac_helianthus,aggregate=TRUE)
+forward_qual_profile_raw
+reverse_qual_profile_raw<-plotQualityProfile(reverse_reads_bac_helianthus,aggregate=TRUE)
+reverse_qual_profile_raw
+
+# First we create an object  that strips away the pathway information leaving behind only the filename. We do this using the basename function. 
+sample_basename_bac_helianthus<-basename(forward_reads_bac_helianthus)
+
+# We then create an object that contains only our sample names.
+samplenames_bac_helianthus<-sub(".r1.*","",sample_basename_bac_helianthus)
+samplenames_bac_helianthus<-sub("_b.raw_1.fq.gz.*","",samplenames_bac_helianthus)
+
+# Next we create two path objects that we will store the paths for our filtered forward and reverse reads. 
+filtN_forward_reads_bac_helianthus<-file.path(helianthus_bac_path,"all_files_processed","filtN_all_files_processed",paste0("filtN_",basename(forward_reads_bac_helianthus)))
+filtN_reverse_reads_bac_helianthus<-file.path(helianthus_bac_path,"all_files_processed","filtN_all_files_processed",paste0("filtN_",basename(reverse_reads_bac_helianthus)))
+
+# We then filter our forward and reverse reads using the filterAndTrim function. Specifying maxN=0 will indicate that sequences with at least 1 ambiguous base will be removed from the dataset. 
+filterAndTrim(forward_reads_bac_helianthus,filtN_forward_reads_bac_helianthus,reverse_reads_bac_helianthus,filtN_reverse_reads_bac_helianthus,maxN=0)
+
+forward_qual_profile_filtn<-plotQualityProfile(filtN_forward_reads_bac_helianthus,aggregate=TRUE)
+forward_qual_profile_filtn
+reverse_qual_profile_filtn<-plotQualityProfile(filtN_reverse_reads_bac_helianthus,aggregate=TRUE)
+reverse_qual_profile_filtn
+
+
+```
+
+# Step 2: Poly-G Trimming, barcode trimming, and primer trimming
+
+```{r}
+# Using the system2 function to pass commands to the shell so that we can run fastp from R. In this case, we call cutadapt and pass the argument --version to find out what version of cutadapt we are using. 
+library(reticulate)
+system2("conda",args=c("run","-n","fastp","fastp --version"),stdout="")
+
+# Create a directory to store the forward and reverse reads after they have been trimmed.
+path_polycut_bac_helianthus<-file.path(helianthus_bac_path,"all_files_processed","poly_cutadapt_all_files_processed")
+if(!dir.exists(path_polycut_bac_helianthus)) dir.create(path_polycut_bac_helianthus)
+
+polycut_forward_reads_bac_helianthus<-file.path(path_polycut_bac_helianthus,paste0("polycut_",basename(forward_reads_bac_helianthus)))
+
+polycut_reverse_reads_bac_helianthus<-file.path(path_polycut_bac_helianthus,paste0("polycut_",basename(reverse_reads_bac_helianthus)))
+
+for (i in seq_along(forward_reads_bac_helianthus)){
+  system2("conda",args=c("run","-n","fastp","fastp",
+"-g","-A","-Q","-L",
+"-o",polycut_forward_reads_bac_helianthus[i], "-O",polycut_reverse_reads_bac_helianthus[i],
+"-i", filtN_forward_reads_bac_helianthus[i],"-I", filtN_reverse_reads_bac_helianthus[i]))
+}
+
+
+# Creating objects that contain the forward and reverse primers used in the study.
+fwdbc_1<-"AACGTGAT"
+fwdbc_2<-"AAACATCG"
+fwdbc_3<-"ATGCCTAA"
+fwdbc_4<-"AGTGGTCA"
+
+
+revbc_1<-"CCGAAGTA"
+revbc_2<-"ACCACTGT"
+revbc_3<-"ACATTGGC"
+revbc_4<-"CATCAAGT"
+revbc_5<-"CGCTGATC"
+revbc_6<-"ACAAGCTA"
+revbc_7<-"CTGTAGCC"
+revbc_8<-"AGTACAAG"
+revbc_9<-"AACAACCA"
+revbc_10<-"AACCGAGA"
+
+revbc_11<-"AACGCTTA"
+revbc_12<-"AAGACGGA"
+revbc_13<-"ACACAGAA"
+revbc_14<-"ACAGCAGA"
+revbc_15<-"ACCTCCAA"
+revbc_16<-"ACGCTCGA"
+revbc_17<-"ACGTATCA"
+revbc_18<-"ACTATGCA"
+revbc_19<-"AGAGTCAA"
+revbc_20<-"AGATCGCA"
+
+revbc_21<-"AGCAGGAA"
+revbc_22<-"AGTCACTA"
+revbc_23<-"ATCCTGTA"
+revbc_24<-"ATTGAGGA"
+revbc_25<-"CAACCACA"
+revbc_26<-"CAATGGAA"
+revbc_27<-"CACTTCGA"
+revbc_28<-"CAGCGTTA"
+revbc_29<-"CATACCAA"
+revbc_30<-"CCAGTTCA"
+
+allorientations<-function(primer){       
+  require(Biostrings)     
+  dna<-DNAString(primer)                                                    
+  orientations<-c(Forward=dna, Complement=Biostrings::complement(dna),Reverse=Biostrings::reverse(dna), 
+             RevComp=Biostrings::reverseComplement(dna)) 
+  return(sapply(orientations,toString))
+}
+
+# Storing all possible orientations of our primers in objects for each primer.
+fwdbc_1.ori<-allorientations(fwdbc_1)
+fwdbc_2.ori<-allorientations(fwdbc_2)
+fwdbc_3.ori<-allorientations(fwdbc_3)
+fwdbc_4.ori<-allorientations(fwdbc_4)
+
+revbc_1.ori<-allorientations(revbc_1)
+revbc_2.ori<-allorientations(revbc_2)
+revbc_3.ori<-allorientations(revbc_3)
+revbc_4.ori<-allorientations(revbc_4)
+revbc_5.ori<-allorientations(revbc_5)
+revbc_6.ori<-allorientations(revbc_6)
+revbc_7.ori<-allorientations(revbc_7)
+revbc_8.ori<-allorientations(revbc_8)
+revbc_9.ori<-allorientations(revbc_9)
+revbc_10.ori<-allorientations(revbc_10)
+
+revbc_11.ori<-allorientations(revbc_11)
+revbc_12.ori<-allorientations(revbc_12)
+revbc_13.ori<-allorientations(revbc_13)
+revbc_14.ori<-allorientations(revbc_14)
+revbc_15.ori<-allorientations(revbc_15)
+revbc_16.ori<-allorientations(revbc_16)
+revbc_17.ori<-allorientations(revbc_17)
+revbc_18.ori<-allorientations(revbc_18)
+revbc_19.ori<-allorientations(revbc_19)
+revbc_20.ori<-allorientations(revbc_20)
+
+
+revbc_21.ori<-allorientations(revbc_21)
+revbc_22.ori<-allorientations(revbc_22)
+revbc_23.ori<-allorientations(revbc_23)
+revbc_24.ori<-allorientations(revbc_24)
+revbc_25.ori<-allorientations(revbc_25)
+revbc_26.ori<-allorientations(revbc_26)
+revbc_27.ori<-allorientations(revbc_27)
+revbc_28.ori<-allorientations(revbc_28)
+revbc_29.ori<-allorientations(revbc_29)
+revbc_30.ori<-allorientations(revbc_30)
+
+
+# Creating a directory to store the forward and reverse reads after they have been trimmed.
+# Create a directory to store the forward and reverse reads after they have been trimmed.
+path_bccut_bac_helianthus<-file.path(helianthus_bac_path,"all_files_processed","bc_cutadapt_all_files_processed")
+if(!dir.exists(path_bccut_bac_helianthus)) dir.create(path_bccut_bac_helianthus)
+
+bccut_forward_reads_bac_helianthus<-file.path(path_bccut_bac_helianthus,paste0("bccut_",basename(forward_reads_bac_helianthus)))
+
+bccut_reverse_reads_bac_helianthus<-file.path(path_bccut_bac_helianthus,paste0("bccut_",basename(reverse_reads_bac_helianthus)))
+
+# Creating objects containing the forward and reverse primer reverse compliment strings. By using the :: syntax we are able to call a function stored in the dada2 package without having to load the whole dada2 package. In this case we will call the rc function of the dada2 package. The rc function takes a sequence object provided by the user and creates the reverse compliment of the sequence. 
+fwdbc_1.rc1<-dada2::rc(fwdbc_1)
+fwdbc_2.rc1<-dada2::rc(fwdbc_2)
+fwdbc_3.rc1<-dada2::rc(fwdbc_3)
+fwdbc_4.rc1<-dada2::rc(fwdbc_4)
+
+revbc_1.rc1<-dada2::rc(revbc_1)
+revbc_2.rc1<-dada2::rc(revbc_2)
+revbc_3.rc1<-dada2::rc(revbc_3)
+revbc_4.rc1<-dada2::rc(revbc_4)
+revbc_5.rc1<-dada2::rc(revbc_5)
+revbc_6.rc1<-dada2::rc(revbc_6)
+revbc_7.rc1<-dada2::rc(revbc_7)
+revbc_8.rc1<-dada2::rc(revbc_8)
+revbc_9.rc1<-dada2::rc(revbc_9)
+revbc_10.rc1<-dada2::rc(revbc_10)
+
+revbc_11.rc1<-dada2::rc(revbc_11)
+revbc_12.rc1<-dada2::rc(revbc_12)
+revbc_13.rc1<-dada2::rc(revbc_13)
+revbc_14.rc1<-dada2::rc(revbc_14)
+revbc_15.rc1<-dada2::rc(revbc_15)
+revbc_16.rc1<-dada2::rc(revbc_16)
+revbc_17.rc1<-dada2::rc(revbc_17)
+revbc_18.rc1<-dada2::rc(revbc_18)
+revbc_19.rc1<-dada2::rc(revbc_19)
+revbc_20.rc1<-dada2::rc(revbc_20)
+
+revbc_21.rc1<-dada2::rc(revbc_21)
+revbc_22.rc1<-dada2::rc(revbc_22)
+revbc_23.rc1<-dada2::rc(revbc_23)
+revbc_24.rc1<-dada2::rc(revbc_24)
+revbc_25.rc1<-dada2::rc(revbc_25)
+revbc_26.rc1<-dada2::rc(revbc_26)
+revbc_27.rc1<-dada2::rc(revbc_27)
+revbc_28.rc1<-dada2::rc(revbc_28)
+revbc_29.rc1<-dada2::rc(revbc_29)
+revbc_30.rc1<-dada2::rc(revbc_30)
+
+
+# Using the paste function we then create objects that contain the flags for the potential combinations of each forward and reverse primer and the reverse compliment. These flags will serve as the argumentst that we provide to cutadapt. The ^ at the beginning of the sequence indicates that the primer should be removed from the beginning of the sequence. 
+fwdbc_1.rev_bc1.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_1.rc1, sep='') 
+fwdbc_1.rev_bc2.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_2.rc1, sep='')
+fwdbc_1.rev_bc3.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_3.rc1, sep='') 
+fwdbc_1.rev_bc4.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_4.rc1, sep='') 
+fwdbc_1.rev_bc5.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_5.rc1, sep='') 
+fwdbc_1.rev_bc6.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_6.rc1, sep='') 
+fwdbc_1.rev_bc7.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_7.rc1, sep='') 
+fwdbc_1.rev_bc8.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_8.rc1, sep='') 
+fwdbc_1.rev_bc9.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_9.rc1, sep='') 
+fwdbc_1.rev_bc10.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_10.rc1, sep='')
+
+fwdbc_1.rev_bc11.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_11.rc1, sep='') 
+fwdbc_1.rev_bc12.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_12.rc1, sep='')
+fwdbc_1.rev_bc13.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_13.rc1, sep='') 
+fwdbc_1.rev_bc14.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_14.rc1, sep='') 
+fwdbc_1.rev_bc15.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_15.rc1, sep='') 
+fwdbc_1.rev_bc16.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_16.rc1, sep='') 
+fwdbc_1.rev_bc17.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_17.rc1, sep='') 
+fwdbc_1.rev_bc18.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_18.rc1, sep='') 
+fwdbc_1.rev_bc19.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_19.rc1, sep='') 
+fwdbc_1.rev_bc20.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_20.rc1, sep='')
+
+fwdbc_1.rev_bc21.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_21.rc1, sep='') 
+fwdbc_1.rev_bc22.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_22.rc1, sep='')
+fwdbc_1.rev_bc23.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_23.rc1, sep='') 
+fwdbc_1.rev_bc24.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_24.rc1, sep='') 
+fwdbc_1.rev_bc25.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_25.rc1, sep='') 
+fwdbc_1.rev_bc26.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_26.rc1, sep='') 
+fwdbc_1.rev_bc27.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_27.rc1, sep='') 
+fwdbc_1.rev_bc28.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_28.rc1, sep='') 
+fwdbc_1.rev_bc29.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_29.rc1, sep='') 
+fwdbc_1.rev_bc30.r1.flags<-paste("-a"," ", "^", fwdbc_1,"...",revbc_30.rc1, sep='')
+
+
+fwdbc_2.rev_bc1.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_1.rc1, sep='') 
+fwdbc_2.rev_bc2.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_2.rc1, sep='')
+fwdbc_2.rev_bc3.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_3.rc1, sep='') 
+fwdbc_2.rev_bc4.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_4.rc1, sep='') 
+fwdbc_2.rev_bc5.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_5.rc1, sep='') 
+fwdbc_2.rev_bc6.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_6.rc1, sep='') 
+fwdbc_2.rev_bc7.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_7.rc1, sep='') 
+fwdbc_2.rev_bc8.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_8.rc1, sep='') 
+fwdbc_2.rev_bc9.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_9.rc1, sep='') 
+fwdbc_2.rev_bc10.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_10.rc1, sep='')
+
+fwdbc_2.rev_bc11.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_11.rc1, sep='') 
+fwdbc_2.rev_bc12.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_12.rc1, sep='')
+fwdbc_2.rev_bc13.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_13.rc1, sep='') 
+fwdbc_2.rev_bc14.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_14.rc1, sep='') 
+fwdbc_2.rev_bc15.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_15.rc1, sep='') 
+fwdbc_2.rev_bc16.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_16.rc1, sep='') 
+fwdbc_2.rev_bc17.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_17.rc1, sep='') 
+fwdbc_2.rev_bc18.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_18.rc1, sep='') 
+fwdbc_2.rev_bc19.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_19.rc1, sep='') 
+fwdbc_2.rev_bc20.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_20.rc1, sep='')
+
+fwdbc_2.rev_bc21.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_21.rc1, sep='') 
+fwdbc_2.rev_bc22.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_22.rc1, sep='')
+fwdbc_2.rev_bc23.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_23.rc1, sep='') 
+fwdbc_2.rev_bc24.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_24.rc1, sep='') 
+fwdbc_2.rev_bc25.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_25.rc1, sep='') 
+fwdbc_2.rev_bc26.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_26.rc1, sep='') 
+fwdbc_2.rev_bc27.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_27.rc1, sep='') 
+fwdbc_2.rev_bc28.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_28.rc1, sep='') 
+fwdbc_2.rev_bc29.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_29.rc1, sep='') 
+fwdbc_2.rev_bc30.r1.flags<-paste("-a"," ", "^", fwdbc_2,"...",revbc_30.rc1, sep='')
+
+fwdbc_3.rev_bc1.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_1.rc1, sep='') 
+fwdbc_3.rev_bc2.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_2.rc1, sep='')
+fwdbc_3.rev_bc3.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_3.rc1, sep='') 
+fwdbc_3.rev_bc4.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_4.rc1, sep='') 
+fwdbc_3.rev_bc5.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_5.rc1, sep='') 
+fwdbc_3.rev_bc6.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_6.rc1, sep='') 
+fwdbc_3.rev_bc7.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_7.rc1, sep='') 
+fwdbc_3.rev_bc8.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_8.rc1, sep='') 
+fwdbc_3.rev_bc9.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_9.rc1, sep='') 
+fwdbc_3.rev_bc10.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_10.rc1, sep='')
+
+fwdbc_3.rev_bc11.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_11.rc1, sep='') 
+fwdbc_3.rev_bc12.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_12.rc1, sep='')
+fwdbc_3.rev_bc13.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_13.rc1, sep='') 
+fwdbc_3.rev_bc14.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_14.rc1, sep='') 
+fwdbc_3.rev_bc15.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_15.rc1, sep='') 
+fwdbc_3.rev_bc16.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_16.rc1, sep='') 
+fwdbc_3.rev_bc17.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_17.rc1, sep='') 
+fwdbc_3.rev_bc18.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_18.rc1, sep='') 
+fwdbc_3.rev_bc19.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_19.rc1, sep='') 
+fwdbc_3.rev_bc20.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_20.rc1, sep='')
+
+fwdbc_3.rev_bc21.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_21.rc1, sep='') 
+fwdbc_3.rev_bc22.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_22.rc1, sep='')
+fwdbc_3.rev_bc23.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_23.rc1, sep='') 
+fwdbc_3.rev_bc24.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_24.rc1, sep='') 
+fwdbc_3.rev_bc25.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_25.rc1, sep='') 
+fwdbc_3.rev_bc26.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_26.rc1, sep='') 
+fwdbc_3.rev_bc27.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_27.rc1, sep='') 
+fwdbc_3.rev_bc28.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_28.rc1, sep='') 
+fwdbc_3.rev_bc29.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_29.rc1, sep='') 
+fwdbc_3.rev_bc30.r1.flags<-paste("-a"," ", "^", fwdbc_3,"...",revbc_30.rc1, sep='')
+
+fwdbc_4.rev_bc1.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_1.rc1, sep='') 
+fwdbc_4.rev_bc2.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_2.rc1, sep='')
+fwdbc_4.rev_bc3.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_3.rc1, sep='') 
+fwdbc_4.rev_bc4.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_4.rc1, sep='') 
+fwdbc_4.rev_bc5.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_5.rc1, sep='') 
+fwdbc_4.rev_bc6.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_6.rc1, sep='') 
+fwdbc_4.rev_bc7.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_7.rc1, sep='') 
+fwdbc_4.rev_bc8.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_8.rc1, sep='') 
+fwdbc_4.rev_bc9.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_9.rc1, sep='') 
+fwdbc_4.rev_bc10.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_10.rc1, sep='')
+
+fwdbc_4.rev_bc11.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_11.rc1, sep='') 
+fwdbc_4.rev_bc12.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_12.rc1, sep='')
+fwdbc_4.rev_bc13.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_13.rc1, sep='') 
+fwdbc_4.rev_bc14.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_14.rc1, sep='') 
+fwdbc_4.rev_bc15.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_15.rc1, sep='') 
+fwdbc_4.rev_bc16.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_16.rc1, sep='') 
+fwdbc_4.rev_bc17.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_17.rc1, sep='') 
+fwdbc_4.rev_bc18.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_18.rc1, sep='') 
+fwdbc_4.rev_bc19.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_19.rc1, sep='') 
+fwdbc_4.rev_bc20.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_20.rc1, sep='')
+
+fwdbc_4.rev_bc21.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_21.rc1, sep='') 
+fwdbc_4.rev_bc22.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_22.rc1, sep='')
+fwdbc_4.rev_bc23.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_23.rc1, sep='') 
+fwdbc_4.rev_bc24.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_24.rc1, sep='') 
+fwdbc_4.rev_bc25.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_25.rc1, sep='') 
+fwdbc_4.rev_bc26.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_26.rc1, sep='') 
+fwdbc_4.rev_bc27.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_27.rc1, sep='') 
+fwdbc_4.rev_bc28.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_28.rc1, sep='') 
+fwdbc_4.rev_bc29.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_29.rc1, sep='') 
+fwdbc_4.rev_bc30.r1.flags<-paste("-a"," ", "^", fwdbc_4,"...",revbc_30.rc1, sep='')
+
+revbc_1.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_1,"...",fwdbc_1.rc1, sep='') 
+revbc_1.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_1,"...",fwdbc_2.rc1, sep='') 
+revbc_1.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_1,"...",fwdbc_3.rc1, sep='') 
+revbc_1.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_1,"...",fwdbc_4.rc1, sep='') 
+
+revbc_2.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_2,"...",fwdbc_1.rc1, sep='') 
+revbc_2.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_2,"...",fwdbc_2.rc1, sep='') 
+revbc_2.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_2,"...",fwdbc_3.rc1, sep='') 
+revbc_2.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_2,"...",fwdbc_4.rc1, sep='') 
+
+revbc_3.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_3,"...",fwdbc_1.rc1, sep='') 
+revbc_3.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_3,"...",fwdbc_2.rc1, sep='') 
+revbc_3.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_3,"...",fwdbc_3.rc1, sep='') 
+revbc_3.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_3,"...",fwdbc_4.rc1, sep='') 
+
+revbc_4.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_4,"...",fwdbc_1.rc1, sep='') 
+revbc_4.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_4,"...",fwdbc_2.rc1, sep='') 
+revbc_4.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_4,"...",fwdbc_3.rc1, sep='') 
+revbc_4.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_4,"...",fwdbc_4.rc1, sep='') 
+
+revbc_5.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_5,"...",fwdbc_1.rc1, sep='') 
+revbc_5.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_5,"...",fwdbc_2.rc1, sep='') 
+revbc_5.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_5,"...",fwdbc_3.rc1, sep='') 
+revbc_5.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_5,"...",fwdbc_4.rc1, sep='') 
+
+revbc_6.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_6,"...",fwdbc_1.rc1, sep='') 
+revbc_6.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_6,"...",fwdbc_2.rc1, sep='') 
+revbc_6.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_6,"...",fwdbc_3.rc1, sep='') 
+revbc_6.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_6,"...",fwdbc_4.rc1, sep='') 
+
+revbc_7.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_7,"...",fwdbc_1.rc1, sep='') 
+revbc_7.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_7,"...",fwdbc_2.rc1, sep='') 
+revbc_7.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_7,"...",fwdbc_3.rc1, sep='') 
+revbc_7.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_7,"...",fwdbc_4.rc1, sep='') 
+
+revbc_8.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_8,"...",fwdbc_1.rc1, sep='') 
+revbc_8.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_8,"...",fwdbc_2.rc1, sep='') 
+revbc_8.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_8,"...",fwdbc_3.rc1, sep='') 
+revbc_8.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_8,"...",fwdbc_4.rc1, sep='') 
+
+revbc_9.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_9,"...",fwdbc_1.rc1, sep='') 
+revbc_9.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_9,"...",fwdbc_2.rc1, sep='') 
+revbc_9.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_9,"...",fwdbc_3.rc1, sep='') 
+revbc_9.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_9,"...",fwdbc_4.rc1, sep='') 
+
+
+revbc_10.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_10,"...",fwdbc_1.rc1, sep='') 
+revbc_10.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_10,"...",fwdbc_2.rc1, sep='') 
+revbc_10.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_10,"...",fwdbc_3.rc1, sep='') 
+revbc_10.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_10,"...",fwdbc_4.rc1, sep='') 
+
+
+
+revbc_11.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_11,"...",fwdbc_1.rc1, sep='') 
+revbc_11.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_11,"...",fwdbc_2.rc1, sep='') 
+revbc_11.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_11,"...",fwdbc_3.rc1, sep='') 
+revbc_11.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_11,"...",fwdbc_4.rc1, sep='') 
+
+revbc_12.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_12,"...",fwdbc_1.rc1, sep='') 
+revbc_12.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_12,"...",fwdbc_2.rc1, sep='') 
+revbc_12.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_12,"...",fwdbc_3.rc1, sep='') 
+revbc_12.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_12,"...",fwdbc_4.rc1, sep='') 
+
+revbc_13.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_13,"...",fwdbc_1.rc1, sep='') 
+revbc_13.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_13,"...",fwdbc_2.rc1, sep='') 
+revbc_13.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_13,"...",fwdbc_3.rc1, sep='') 
+revbc_13.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_13,"...",fwdbc_4.rc1, sep='') 
+
+revbc_14.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_14,"...",fwdbc_1.rc1, sep='') 
+revbc_14.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_14,"...",fwdbc_2.rc1, sep='') 
+revbc_14.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_14,"...",fwdbc_3.rc1, sep='') 
+revbc_14.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_14,"...",fwdbc_4.rc1, sep='') 
+
+revbc_15.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_15,"...",fwdbc_1.rc1, sep='') 
+revbc_15.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_15,"...",fwdbc_2.rc1, sep='') 
+revbc_15.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_15,"...",fwdbc_3.rc1, sep='') 
+revbc_15.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_15,"...",fwdbc_4.rc1, sep='') 
+
+revbc_16.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_16,"...",fwdbc_1.rc1, sep='') 
+revbc_16.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_16,"...",fwdbc_2.rc1, sep='') 
+revbc_16.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_16,"...",fwdbc_3.rc1, sep='') 
+revbc_16.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_16,"...",fwdbc_4.rc1, sep='') 
+
+revbc_17.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_17,"...",fwdbc_1.rc1, sep='') 
+revbc_17.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_17,"...",fwdbc_2.rc1, sep='') 
+revbc_17.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_17,"...",fwdbc_3.rc1, sep='') 
+revbc_17.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_17,"...",fwdbc_4.rc1, sep='') 
+
+revbc_18.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_18,"...",fwdbc_1.rc1, sep='') 
+revbc_18.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_18,"...",fwdbc_2.rc1, sep='') 
+revbc_18.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_18,"...",fwdbc_3.rc1, sep='') 
+revbc_18.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_18,"...",fwdbc_4.rc1, sep='') 
+
+revbc_19.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_19,"...",fwdbc_1.rc1, sep='') 
+revbc_19.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_19,"...",fwdbc_2.rc1, sep='') 
+revbc_19.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_19,"...",fwdbc_3.rc1, sep='') 
+revbc_19.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_19,"...",fwdbc_4.rc1, sep='') 
+
+revbc_20.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_20,"...",fwdbc_1.rc1, sep='') 
+revbc_20.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_20,"...",fwdbc_2.rc1, sep='') 
+revbc_20.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_20,"...",fwdbc_3.rc1, sep='') 
+revbc_20.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_20,"...",fwdbc_4.rc1, sep='') 
+
+revbc_21.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_21,"...",fwdbc_1.rc1, sep='') 
+revbc_21.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_21,"...",fwdbc_2.rc1, sep='') 
+revbc_21.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_21,"...",fwdbc_3.rc1, sep='') 
+revbc_21.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_21,"...",fwdbc_4.rc1, sep='') 
+
+revbc_22.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_22,"...",fwdbc_1.rc1, sep='') 
+revbc_22.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_22,"...",fwdbc_2.rc1, sep='') 
+revbc_22.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_22,"...",fwdbc_3.rc1, sep='') 
+revbc_22.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_22,"...",fwdbc_4.rc1, sep='') 
+
+revbc_23.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_23,"...",fwdbc_1.rc1, sep='') 
+revbc_23.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_23,"...",fwdbc_2.rc1, sep='') 
+revbc_23.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_23,"...",fwdbc_3.rc1, sep='') 
+revbc_23.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_23,"...",fwdbc_4.rc1, sep='') 
+
+revbc_24.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_24,"...",fwdbc_1.rc1, sep='') 
+revbc_24.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_24,"...",fwdbc_2.rc1, sep='') 
+revbc_24.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_24,"...",fwdbc_3.rc1, sep='') 
+revbc_24.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_24,"...",fwdbc_4.rc1, sep='') 
+
+revbc_25.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_25,"...",fwdbc_1.rc1, sep='') 
+revbc_25.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_25,"...",fwdbc_2.rc1, sep='') 
+revbc_25.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_25,"...",fwdbc_3.rc1, sep='') 
+revbc_25.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_25,"...",fwdbc_4.rc1, sep='') 
+
+revbc_26.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_26,"...",fwdbc_1.rc1, sep='') 
+revbc_26.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_26,"...",fwdbc_2.rc1, sep='') 
+revbc_26.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_26,"...",fwdbc_3.rc1, sep='') 
+revbc_26.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_26,"...",fwdbc_4.rc1, sep='') 
+
+revbc_27.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_27,"...",fwdbc_1.rc1, sep='') 
+revbc_27.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_27,"...",fwdbc_2.rc1, sep='') 
+revbc_27.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_27,"...",fwdbc_3.rc1, sep='') 
+revbc_27.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_27,"...",fwdbc_4.rc1, sep='') 
+
+revbc_28.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_28,"...",fwdbc_1.rc1, sep='') 
+revbc_28.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_28,"...",fwdbc_2.rc1, sep='') 
+revbc_28.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_28,"...",fwdbc_3.rc1, sep='') 
+revbc_28.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_28,"...",fwdbc_4.rc1, sep='') 
+
+revbc_29.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_29,"...",fwdbc_1.rc1, sep='') 
+revbc_29.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_29,"...",fwdbc_2.rc1, sep='') 
+revbc_29.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_29,"...",fwdbc_3.rc1, sep='') 
+revbc_29.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_29,"...",fwdbc_4.rc1, sep='') 
+
+revbc_30.fwdbc_1.r2f.flags<-paste("-a"," ", "^", revbc_30,"...",fwdbc_1.rc1, sep='') 
+revbc_30.fwdbc_2.r2f.flags<-paste("-a"," ", "^", revbc_30,"...",fwdbc_2.rc1, sep='') 
+revbc_30.fwdbc_3.r2f.flags<-paste("-a"," ", "^", revbc_30,"...",fwdbc_3.rc1, sep='') 
+revbc_30.fwdbc_4.r2f.flags<-paste("-a"," ", "^", revbc_30,"...",fwdbc_4.rc1, sep='') 
+ 
+revbc_1.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_1,"...",fwdbc_1.rc1, sep='') 
+revbc_1.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_1,"...",fwdbc_2.rc1, sep='') 
+revbc_1.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_1,"...",fwdbc_3.rc1, sep='') 
+revbc_1.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_1,"...",fwdbc_4.rc1, sep='') 
+
+revbc_2.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_2,"...",fwdbc_1.rc1, sep='') 
+revbc_2.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_2,"...",fwdbc_2.rc1, sep='') 
+revbc_2.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_2,"...",fwdbc_3.rc1, sep='') 
+revbc_2.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_2,"...",fwdbc_4.rc1, sep='') 
+
+revbc_3.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_3,"...",fwdbc_1.rc1, sep='') 
+revbc_3.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_3,"...",fwdbc_2.rc1, sep='') 
+revbc_3.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_3,"...",fwdbc_3.rc1, sep='') 
+revbc_3.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_3,"...",fwdbc_4.rc1, sep='') 
+
+revbc_4.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_4,"...",fwdbc_1.rc1, sep='') 
+revbc_4.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_4,"...",fwdbc_2.rc1, sep='') 
+revbc_4.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_4,"...",fwdbc_3.rc1, sep='') 
+revbc_4.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_4,"...",fwdbc_4.rc1, sep='') 
+
+revbc_5.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_5,"...",fwdbc_1.rc1, sep='') 
+revbc_5.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_5,"...",fwdbc_2.rc1, sep='') 
+revbc_5.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_5,"...",fwdbc_3.rc1, sep='') 
+revbc_5.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_5,"...",fwdbc_4.rc1, sep='') 
+
+revbc_6.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_6,"...",fwdbc_1.rc1, sep='') 
+revbc_6.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_6,"...",fwdbc_2.rc1, sep='') 
+revbc_6.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_6,"...",fwdbc_3.rc1, sep='') 
+revbc_6.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_6,"...",fwdbc_4.rc1, sep='') 
+
+revbc_7.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_7,"...",fwdbc_1.rc1, sep='') 
+revbc_7.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_7,"...",fwdbc_2.rc1, sep='') 
+revbc_7.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_7,"...",fwdbc_3.rc1, sep='') 
+revbc_7.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_7,"...",fwdbc_4.rc1, sep='') 
+
+revbc_8.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_8,"...",fwdbc_1.rc1, sep='') 
+revbc_8.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_8,"...",fwdbc_2.rc1, sep='') 
+revbc_8.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_8,"...",fwdbc_3.rc1, sep='') 
+revbc_8.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_8,"...",fwdbc_4.rc1, sep='') 
+
+revbc_9.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_9,"...",fwdbc_1.rc1, sep='') 
+revbc_9.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_9,"...",fwdbc_2.rc1, sep='') 
+revbc_9.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_9,"...",fwdbc_3.rc1, sep='') 
+revbc_9.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_9,"...",fwdbc_4.rc1, sep='') 
+
+revbc_10.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_10,"...",fwdbc_1.rc1, sep='') 
+revbc_10.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_10,"...",fwdbc_2.rc1, sep='') 
+revbc_10.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_10,"...",fwdbc_3.rc1, sep='') 
+revbc_10.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_10,"...",fwdbc_4.rc1, sep='') 
+
+revbc_11.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_11,"...",fwdbc_1.rc1, sep='') 
+revbc_11.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_11,"...",fwdbc_2.rc1, sep='') 
+revbc_11.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_11,"...",fwdbc_3.rc1, sep='') 
+revbc_11.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_11,"...",fwdbc_4.rc1, sep='') 
+
+revbc_12.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_12,"...",fwdbc_1.rc1, sep='') 
+revbc_12.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_12,"...",fwdbc_2.rc1, sep='') 
+revbc_12.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_12,"...",fwdbc_3.rc1, sep='') 
+revbc_12.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_12,"...",fwdbc_4.rc1, sep='') 
+
+revbc_13.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_13,"...",fwdbc_1.rc1, sep='') 
+revbc_13.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_13,"...",fwdbc_2.rc1, sep='') 
+revbc_13.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_13,"...",fwdbc_3.rc1, sep='') 
+revbc_13.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_13,"...",fwdbc_4.rc1, sep='') 
+
+revbc_14.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_14,"...",fwdbc_1.rc1, sep='') 
+revbc_14.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_14,"...",fwdbc_2.rc1, sep='') 
+revbc_14.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_14,"...",fwdbc_3.rc1, sep='') 
+revbc_14.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_14,"...",fwdbc_4.rc1, sep='') 
+
+revbc_15.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_15,"...",fwdbc_1.rc1, sep='') 
+revbc_15.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_15,"...",fwdbc_2.rc1, sep='') 
+revbc_15.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_15,"...",fwdbc_3.rc1, sep='') 
+revbc_15.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_15,"...",fwdbc_4.rc1, sep='') 
+
+
+revbc_16.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_16,"...",fwdbc_1.rc1, sep='') 
+revbc_16.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_16,"...",fwdbc_2.rc1, sep='') 
+revbc_16.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_16,"...",fwdbc_3.rc1, sep='') 
+revbc_16.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_16,"...",fwdbc_4.rc1, sep='') 
+
+revbc_17.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_17,"...",fwdbc_1.rc1, sep='') 
+revbc_17.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_17,"...",fwdbc_2.rc1, sep='') 
+revbc_17.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_17,"...",fwdbc_3.rc1, sep='') 
+revbc_17.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_17,"...",fwdbc_4.rc1, sep='') 
+
+revbc_18.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_18,"...",fwdbc_1.rc1, sep='') 
+revbc_18.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_18,"...",fwdbc_2.rc1, sep='') 
+revbc_18.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_18,"...",fwdbc_3.rc1, sep='') 
+revbc_18.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_18,"...",fwdbc_4.rc1, sep='') 
+
+revbc_19.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_19,"...",fwdbc_1.rc1, sep='') 
+revbc_19.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_19,"...",fwdbc_2.rc1, sep='') 
+revbc_19.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_19,"...",fwdbc_3.rc1, sep='') 
+revbc_19.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_19,"...",fwdbc_4.rc1, sep='') 
+
+revbc_20.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_20,"...",fwdbc_1.rc1, sep='') 
+revbc_20.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_20,"...",fwdbc_2.rc1, sep='') 
+revbc_20.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_20,"...",fwdbc_3.rc1, sep='') 
+revbc_20.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_20,"...",fwdbc_4.rc1, sep='') 
+
+
+revbc_21.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_21,"...",fwdbc_1.rc1, sep='') 
+revbc_21.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_21,"...",fwdbc_2.rc1, sep='') 
+revbc_21.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_21,"...",fwdbc_3.rc1, sep='') 
+revbc_21.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_21,"...",fwdbc_4.rc1, sep='') 
+
+revbc_22.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_22,"...",fwdbc_1.rc1, sep='') 
+revbc_22.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_22,"...",fwdbc_2.rc1, sep='') 
+revbc_22.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_22,"...",fwdbc_3.rc1, sep='') 
+revbc_22.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_22,"...",fwdbc_4.rc1, sep='') 
+
+revbc_23.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_23,"...",fwdbc_1.rc1, sep='') 
+revbc_23.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_23,"...",fwdbc_2.rc1, sep='') 
+revbc_23.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_23,"...",fwdbc_3.rc1, sep='') 
+revbc_23.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_23,"...",fwdbc_4.rc1, sep='') 
+
+revbc_24.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_24,"...",fwdbc_1.rc1, sep='') 
+revbc_24.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_24,"...",fwdbc_2.rc1, sep='') 
+revbc_24.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_24,"...",fwdbc_3.rc1, sep='') 
+revbc_24.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_24,"...",fwdbc_4.rc1, sep='') 
+
+revbc_25.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_25,"...",fwdbc_1.rc1, sep='') 
+revbc_25.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_25,"...",fwdbc_2.rc1, sep='') 
+revbc_25.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_25,"...",fwdbc_3.rc1, sep='') 
+revbc_25.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_25,"...",fwdbc_4.rc1, sep='') 
+
+revbc_26.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_26,"...",fwdbc_1.rc1, sep='') 
+revbc_26.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_26,"...",fwdbc_2.rc1, sep='') 
+revbc_26.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_26,"...",fwdbc_3.rc1, sep='') 
+revbc_26.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_26,"...",fwdbc_4.rc1, sep='') 
+ 
+revbc_27.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_27,"...",fwdbc_1.rc1, sep='') 
+revbc_27.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_27,"...",fwdbc_2.rc1, sep='') 
+revbc_27.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_27,"...",fwdbc_3.rc1, sep='') 
+revbc_27.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_27,"...",fwdbc_4.rc1, sep='') 
+
+revbc_28.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_28,"...",fwdbc_1.rc1, sep='') 
+revbc_28.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_28,"...",fwdbc_2.rc1, sep='') 
+revbc_28.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_28,"...",fwdbc_3.rc1, sep='') 
+revbc_28.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_28,"...",fwdbc_4.rc1, sep='') 
+
+revbc_29.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_29,"...",fwdbc_1.rc1, sep='') 
+revbc_29.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_29,"...",fwdbc_2.rc1, sep='') 
+revbc_29.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_29,"...",fwdbc_3.rc1, sep='') 
+revbc_29.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_29,"...",fwdbc_4.rc1, sep='') 
+
+revbc_30.fwdbc_1.r2.flags<-paste("-A"," ", "^", revbc_30,"...",fwdbc_1.rc1, sep='') 
+revbc_30.fwdbc_2.r2.flags<-paste("-A"," ", "^", revbc_30,"...",fwdbc_2.rc1, sep='') 
+revbc_30.fwdbc_3.r2.flags<-paste("-A"," ", "^", revbc_30,"...",fwdbc_3.rc1, sep='') 
+revbc_30.fwdbc_4.r2.flags<-paste("-A"," ", "^", revbc_30,"...",fwdbc_4.rc1, sep='') 
+
+fwdbc_1.rev_bc1.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_1.rc1, sep='') 
+fwdbc_1.rev_bc2.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_2.rc1, sep='')
+fwdbc_1.rev_bc3.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_3.rc1, sep='') 
+fwdbc_1.rev_bc4.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_4.rc1, sep='') 
+fwdbc_1.rev_bc5.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_5.rc1, sep='') 
+fwdbc_1.rev_bc6.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_6.rc1, sep='') 
+fwdbc_1.rev_bc7.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_7.rc1, sep='') 
+fwdbc_1.rev_bc8.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_8.rc1, sep='') 
+fwdbc_1.rev_bc9.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_9.rc1, sep='') 
+fwdbc_1.rev_bc10.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_10.rc1, sep='')
+
+fwdbc_1.rev_bc11.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_11.rc1, sep='') 
+fwdbc_1.rev_bc12.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_12.rc1, sep='')
+fwdbc_1.rev_bc13.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_13.rc1, sep='') 
+fwdbc_1.rev_bc14.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_14.rc1, sep='') 
+fwdbc_1.rev_bc15.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_15.rc1, sep='') 
+fwdbc_1.rev_bc16.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_16.rc1, sep='') 
+fwdbc_1.rev_bc17.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_17.rc1, sep='') 
+fwdbc_1.rev_bc18.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_18.rc1, sep='') 
+fwdbc_1.rev_bc19.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_19.rc1, sep='') 
+fwdbc_1.rev_bc20.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_20.rc1, sep='')
+
+fwdbc_1.rev_bc21.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_21.rc1, sep='') 
+fwdbc_1.rev_bc22.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_22.rc1, sep='')
+fwdbc_1.rev_bc23.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_23.rc1, sep='') 
+fwdbc_1.rev_bc24.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_24.rc1, sep='') 
+fwdbc_1.rev_bc25.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_25.rc1, sep='') 
+fwdbc_1.rev_bc26.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_26.rc1, sep='') 
+fwdbc_1.rev_bc27.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_27.rc1, sep='') 
+fwdbc_1.rev_bc28.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_28.rc1, sep='') 
+fwdbc_1.rev_bc29.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_29.rc1, sep='') 
+fwdbc_1.rev_bc30.r1r.flags<-paste("-A"," ", "^", fwdbc_1,"...",revbc_30.rc1, sep='')
+
+fwdbc_2.rev_bc1.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_1.rc1, sep='') 
+fwdbc_2.rev_bc2.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_2.rc1, sep='')
+fwdbc_2.rev_bc3.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_3.rc1, sep='') 
+fwdbc_2.rev_bc4.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_4.rc1, sep='') 
+fwdbc_2.rev_bc5.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_5.rc1, sep='') 
+fwdbc_2.rev_bc6.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_6.rc1, sep='') 
+fwdbc_2.rev_bc7.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_7.rc1, sep='') 
+fwdbc_2.rev_bc8.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_8.rc1, sep='') 
+fwdbc_2.rev_bc9.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_9.rc1, sep='') 
+fwdbc_2.rev_bc10.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_10.rc1, sep='')
+
+fwdbc_2.rev_bc11.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_11.rc1, sep='') 
+fwdbc_2.rev_bc12.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_12.rc1, sep='')
+fwdbc_2.rev_bc13.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_13.rc1, sep='') 
+fwdbc_2.rev_bc14.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_14.rc1, sep='') 
+fwdbc_2.rev_bc15.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_15.rc1, sep='') 
+fwdbc_2.rev_bc16.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_16.rc1, sep='') 
+fwdbc_2.rev_bc17.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_17.rc1, sep='') 
+fwdbc_2.rev_bc18.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_18.rc1, sep='') 
+fwdbc_2.rev_bc19.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_19.rc1, sep='') 
+fwdbc_2.rev_bc20.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_20.rc1, sep='')
+
+fwdbc_2.rev_bc21.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_21.rc1, sep='') 
+fwdbc_2.rev_bc22.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_22.rc1, sep='')
+fwdbc_2.rev_bc23.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_23.rc1, sep='') 
+fwdbc_2.rev_bc24.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_24.rc1, sep='') 
+fwdbc_2.rev_bc25.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_25.rc1, sep='') 
+fwdbc_2.rev_bc26.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_26.rc1, sep='') 
+fwdbc_2.rev_bc27.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_27.rc1, sep='') 
+fwdbc_2.rev_bc28.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_28.rc1, sep='') 
+fwdbc_2.rev_bc29.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_29.rc1, sep='') 
+fwdbc_2.rev_bc30.r1r.flags<-paste("-A"," ", "^", fwdbc_2,"...",revbc_30.rc1, sep='')
+
+fwdbc_3.rev_bc1.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_1.rc1, sep='') 
+fwdbc_3.rev_bc2.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_2.rc1, sep='')
+fwdbc_3.rev_bc3.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_3.rc1, sep='') 
+fwdbc_3.rev_bc4.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_4.rc1, sep='') 
+fwdbc_3.rev_bc5.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_5.rc1, sep='') 
+fwdbc_3.rev_bc6.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_6.rc1, sep='') 
+fwdbc_3.rev_bc7.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_7.rc1, sep='') 
+fwdbc_3.rev_bc8.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_8.rc1, sep='') 
+fwdbc_3.rev_bc9.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_9.rc1, sep='') 
+fwdbc_3.rev_bc10.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_10.rc1, sep='')
+
+fwdbc_3.rev_bc11.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_11.rc1, sep='') 
+fwdbc_3.rev_bc12.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_12.rc1, sep='')
+fwdbc_3.rev_bc13.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_13.rc1, sep='') 
+fwdbc_3.rev_bc14.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_14.rc1, sep='') 
+fwdbc_3.rev_bc15.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_15.rc1, sep='') 
+fwdbc_3.rev_bc16.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_16.rc1, sep='') 
+fwdbc_3.rev_bc17.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_17.rc1, sep='') 
+fwdbc_3.rev_bc18.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_18.rc1, sep='') 
+fwdbc_3.rev_bc19.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_19.rc1, sep='') 
+fwdbc_3.rev_bc20.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_20.rc1, sep='')
+
+fwdbc_3.rev_bc21.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_21.rc1, sep='') 
+fwdbc_3.rev_bc22.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_22.rc1, sep='')
+fwdbc_3.rev_bc23.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_23.rc1, sep='') 
+fwdbc_3.rev_bc24.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_24.rc1, sep='') 
+fwdbc_3.rev_bc25.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_25.rc1, sep='') 
+fwdbc_3.rev_bc26.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_26.rc1, sep='') 
+fwdbc_3.rev_bc27.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_27.rc1, sep='') 
+fwdbc_3.rev_bc28.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_28.rc1, sep='') 
+fwdbc_3.rev_bc29.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_29.rc1, sep='') 
+fwdbc_3.rev_bc30.r1r.flags<-paste("-A"," ", "^", fwdbc_3,"...",revbc_30.rc1, sep='')
+
+fwdbc_4.rev_bc1.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_1.rc1, sep='') 
+fwdbc_4.rev_bc2.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_2.rc1, sep='')
+fwdbc_4.rev_bc3.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_3.rc1, sep='') 
+fwdbc_4.rev_bc4.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_4.rc1, sep='') 
+fwdbc_4.rev_bc5.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_5.rc1, sep='') 
+fwdbc_4.rev_bc6.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_6.rc1, sep='') 
+fwdbc_4.rev_bc7.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_7.rc1, sep='') 
+fwdbc_4.rev_bc8.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_8.rc1, sep='') 
+fwdbc_4.rev_bc9.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_9.rc1, sep='') 
+fwdbc_4.rev_bc10.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_10.rc1, sep='')
+
+fwdbc_4.rev_bc11.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_11.rc1, sep='') 
+fwdbc_4.rev_bc12.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_12.rc1, sep='')
+fwdbc_4.rev_bc13.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_13.rc1, sep='') 
+fwdbc_4.rev_bc14.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_14.rc1, sep='') 
+fwdbc_4.rev_bc15.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_15.rc1, sep='') 
+fwdbc_4.rev_bc16.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_16.rc1, sep='') 
+fwdbc_4.rev_bc17.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_17.rc1, sep='') 
+fwdbc_4.rev_bc18.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_18.rc1, sep='') 
+fwdbc_4.rev_bc19.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_19.rc1, sep='') 
+fwdbc_4.rev_bc20.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_20.rc1, sep='')
+
+fwdbc_4.rev_bc21.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_21.rc1, sep='') 
+fwdbc_4.rev_bc22.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_22.rc1, sep='')
+fwdbc_4.rev_bc23.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_23.rc1, sep='') 
+fwdbc_4.rev_bc24.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_24.rc1, sep='') 
+fwdbc_4.rev_bc25.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_25.rc1, sep='') 
+fwdbc_4.rev_bc26.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_26.rc1, sep='') 
+fwdbc_4.rev_bc27.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_27.rc1, sep='') 
+fwdbc_4.rev_bc28.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_28.rc1, sep='') 
+fwdbc_4.rev_bc29.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_29.rc1, sep='') 
+fwdbc_4.rev_bc30.r1r.flags<-paste("-A"," ", "^", fwdbc_4,"...",revbc_30.rc1, sep='')
+
+
+
+
+
+for (i in seq_along(forward_reads_bac_helianthus)){
+  system2("conda",args=c("run","-n","cutadaptenv","cutadapt",
+    fwdbc_1.rev_bc1.r1.flags,
+fwdbc_1.rev_bc2.r1.flags,
+fwdbc_1.rev_bc3.r1.flags,
+fwdbc_1.rev_bc4.r1.flags,
+fwdbc_1.rev_bc5.r1.flags,
+fwdbc_1.rev_bc6.r1.flags,
+fwdbc_1.rev_bc7.r1.flags,
+fwdbc_1.rev_bc8.r1.flags,
+fwdbc_1.rev_bc9.r1.flags,
+fwdbc_1.rev_bc10.r1.flags,
+
+fwdbc_1.rev_bc11.r1.flags,
+fwdbc_1.rev_bc12.r1.flags,
+fwdbc_1.rev_bc13.r1.flags,
+fwdbc_1.rev_bc14.r1.flags,
+fwdbc_1.rev_bc15.r1.flags,
+fwdbc_1.rev_bc16.r1.flags,
+fwdbc_1.rev_bc17.r1.flags,
+fwdbc_1.rev_bc18.r1.flags,
+fwdbc_1.rev_bc19.r1.flags,
+fwdbc_1.rev_bc20.r1.flags,
+
+fwdbc_1.rev_bc21.r1.flags,
+fwdbc_1.rev_bc22.r1.flags,
+fwdbc_1.rev_bc23.r1.flags,
+fwdbc_1.rev_bc24.r1.flags,
+fwdbc_1.rev_bc25.r1.flags,
+fwdbc_1.rev_bc26.r1.flags,
+fwdbc_1.rev_bc27.r1.flags,
+fwdbc_1.rev_bc28.r1.flags,
+fwdbc_1.rev_bc29.r1.flags,
+fwdbc_1.rev_bc30.r1.flags,
+
+
+fwdbc_2.rev_bc1.r1.flags,
+fwdbc_2.rev_bc2.r1.flags,
+fwdbc_2.rev_bc3.r1.flags,
+fwdbc_2.rev_bc4.r1.flags,
+fwdbc_2.rev_bc5.r1.flags,
+fwdbc_2.rev_bc6.r1.flags,
+fwdbc_2.rev_bc7.r1.flags,
+fwdbc_2.rev_bc8.r1.flags,
+fwdbc_2.rev_bc9.r1.flags,
+fwdbc_2.rev_bc10.r1.flags,
+
+fwdbc_2.rev_bc11.r1.flags,
+fwdbc_2.rev_bc12.r1.flags,
+fwdbc_2.rev_bc13.r1.flags,
+fwdbc_2.rev_bc14.r1.flags,
+fwdbc_2.rev_bc15.r1.flags,
+fwdbc_2.rev_bc16.r1.flags,
+fwdbc_2.rev_bc17.r1.flags,
+fwdbc_2.rev_bc18.r1.flags,
+fwdbc_2.rev_bc19.r1.flags,
+fwdbc_2.rev_bc20.r1.flags,
+
+fwdbc_2.rev_bc21.r1.flags,
+fwdbc_2.rev_bc22.r1.flags,
+fwdbc_2.rev_bc23.r1.flags,
+fwdbc_2.rev_bc24.r1.flags,
+fwdbc_2.rev_bc25.r1.flags,
+fwdbc_2.rev_bc26.r1.flags,
+fwdbc_2.rev_bc27.r1.flags,
+fwdbc_2.rev_bc28.r1.flags,
+fwdbc_2.rev_bc29.r1.flags,
+fwdbc_2.rev_bc30.r1.flags,
+
+fwdbc_3.rev_bc1.r1.flags,
+fwdbc_3.rev_bc2.r1.flags,
+fwdbc_3.rev_bc3.r1.flags,
+fwdbc_3.rev_bc4.r1.flags,
+fwdbc_3.rev_bc5.r1.flags,
+fwdbc_3.rev_bc6.r1.flags,
+fwdbc_3.rev_bc7.r1.flags,
+fwdbc_3.rev_bc8.r1.flags,
+fwdbc_3.rev_bc9.r1.flags,
+fwdbc_3.rev_bc10.r1.flags,
+
+fwdbc_3.rev_bc11.r1.flags,
+fwdbc_3.rev_bc12.r1.flags,
+fwdbc_3.rev_bc13.r1.flags,
+fwdbc_3.rev_bc14.r1.flags,
+fwdbc_3.rev_bc15.r1.flags,
+fwdbc_3.rev_bc16.r1.flags,
+fwdbc_3.rev_bc17.r1.flags,
+fwdbc_3.rev_bc18.r1.flags,
+fwdbc_3.rev_bc19.r1.flags,
+fwdbc_3.rev_bc20.r1.flags,
+
+fwdbc_3.rev_bc21.r1.flags,
+fwdbc_3.rev_bc22.r1.flags,
+fwdbc_3.rev_bc23.r1.flags,
+fwdbc_3.rev_bc24.r1.flags,
+fwdbc_3.rev_bc25.r1.flags,
+fwdbc_3.rev_bc26.r1.flags,
+fwdbc_3.rev_bc27.r1.flags,
+fwdbc_3.rev_bc28.r1.flags,
+fwdbc_3.rev_bc29.r1.flags,
+fwdbc_3.rev_bc30.r1.flags,
+
+fwdbc_4.rev_bc1.r1.flags,
+fwdbc_4.rev_bc2.r1.flags,
+fwdbc_4.rev_bc3.r1.flags,
+fwdbc_4.rev_bc4.r1.flags,
+fwdbc_4.rev_bc5.r1.flags,
+fwdbc_4.rev_bc6.r1.flags,
+fwdbc_4.rev_bc7.r1.flags,
+fwdbc_4.rev_bc8.r1.flags,
+fwdbc_4.rev_bc9.r1.flags,
+fwdbc_4.rev_bc10.r1.flags,
+
+fwdbc_4.rev_bc11.r1.flags,
+fwdbc_4.rev_bc12.r1.flags,
+fwdbc_4.rev_bc13.r1.flags,
+fwdbc_4.rev_bc14.r1.flags,
+fwdbc_4.rev_bc15.r1.flags,
+fwdbc_4.rev_bc16.r1.flags,
+fwdbc_4.rev_bc17.r1.flags,
+fwdbc_4.rev_bc18.r1.flags,
+fwdbc_4.rev_bc19.r1.flags,
+fwdbc_4.rev_bc20.r1.flags,
+
+fwdbc_4.rev_bc21.r1.flags,
+fwdbc_4.rev_bc22.r1.flags,
+fwdbc_4.rev_bc23.r1.flags,
+fwdbc_4.rev_bc24.r1.flags,
+fwdbc_4.rev_bc25.r1.flags,
+fwdbc_4.rev_bc26.r1.flags,
+fwdbc_4.rev_bc27.r1.flags,
+fwdbc_4.rev_bc28.r1.flags,
+fwdbc_4.rev_bc29.r1.flags,
+fwdbc_4.rev_bc30.r1.flags,
+
+revbc_1.fwdbc_1.r2f.flags,
+revbc_1.fwdbc_2.r2f.flags,
+revbc_1.fwdbc_3.r2f.flags,
+revbc_1.fwdbc_4.r2f.flags,
+
+revbc_2.fwdbc_1.r2f.flags,
+revbc_2.fwdbc_2.r2f.flags,
+revbc_2.fwdbc_3.r2f.flags,
+revbc_2.fwdbc_4.r2f.flags,
+
+revbc_3.fwdbc_1.r2f.flags,
+revbc_3.fwdbc_2.r2f.flags,
+revbc_3.fwdbc_3.r2f.flags,
+revbc_3.fwdbc_4.r2f.flags,
+
+revbc_4.fwdbc_1.r2f.flags,
+revbc_4.fwdbc_2.r2f.flags,
+revbc_4.fwdbc_3.r2f.flags,
+revbc_4.fwdbc_4.r2f.flags,
+
+revbc_5.fwdbc_1.r2f.flags,
+revbc_5.fwdbc_2.r2f.flags,
+revbc_5.fwdbc_3.r2f.flags,
+revbc_5.fwdbc_4.r2f.flags,
+
+revbc_6.fwdbc_1.r2f.flags,
+revbc_6.fwdbc_2.r2f.flags,
+revbc_6.fwdbc_3.r2f.flags,
+revbc_6.fwdbc_4.r2f.flags,
+
+revbc_7.fwdbc_1.r2f.flags,
+revbc_7.fwdbc_2.r2f.flags,
+revbc_7.fwdbc_3.r2f.flags,
+revbc_7.fwdbc_4.r2f.flags,
+
+revbc_8.fwdbc_1.r2f.flags,
+revbc_8.fwdbc_2.r2f.flags,
+revbc_8.fwdbc_3.r2f.flags,
+revbc_8.fwdbc_4.r2f.flags,
+
+revbc_9.fwdbc_1.r2f.flags,
+revbc_9.fwdbc_2.r2f.flags,
+revbc_9.fwdbc_3.r2f.flags,
+revbc_9.fwdbc_4.r2f.flags,
+
+
+revbc_10.fwdbc_1.r2f.flags,
+revbc_10.fwdbc_2.r2f.flags,
+revbc_10.fwdbc_3.r2f.flags,
+revbc_10.fwdbc_4.r2f.flags,
+
+
+
+revbc_11.fwdbc_1.r2f.flags,
+revbc_11.fwdbc_2.r2f.flags,
+revbc_11.fwdbc_3.r2f.flags,
+revbc_11.fwdbc_4.r2f.flags,
+
+revbc_12.fwdbc_1.r2f.flags,
+revbc_12.fwdbc_2.r2f.flags,
+revbc_12.fwdbc_3.r2f.flags,
+revbc_12.fwdbc_4.r2f.flags,
+
+revbc_13.fwdbc_1.r2f.flags,
+revbc_13.fwdbc_2.r2f.flags,
+revbc_13.fwdbc_3.r2f.flags,
+revbc_13.fwdbc_4.r2f.flags,
+
+revbc_14.fwdbc_1.r2f.flags,
+revbc_14.fwdbc_2.r2f.flags,
+revbc_14.fwdbc_3.r2f.flags,
+revbc_14.fwdbc_4.r2f.flags,
+
+revbc_15.fwdbc_1.r2f.flags,
+revbc_15.fwdbc_2.r2f.flags,
+revbc_15.fwdbc_3.r2f.flags,
+revbc_15.fwdbc_4.r2f.flags,
+
+revbc_16.fwdbc_1.r2f.flags,
+revbc_16.fwdbc_2.r2f.flags,
+revbc_16.fwdbc_3.r2f.flags,
+revbc_16.fwdbc_4.r2f.flags,
+
+revbc_17.fwdbc_1.r2f.flags,
+revbc_17.fwdbc_2.r2f.flags,
+revbc_17.fwdbc_3.r2f.flags,
+revbc_17.fwdbc_4.r2f.flags,
+
+revbc_18.fwdbc_1.r2f.flags,
+revbc_18.fwdbc_2.r2f.flags,
+revbc_18.fwdbc_3.r2f.flags,
+revbc_18.fwdbc_4.r2f.flags,
+
+revbc_19.fwdbc_1.r2f.flags,
+revbc_19.fwdbc_2.r2f.flags,
+revbc_19.fwdbc_3.r2f.flags,
+revbc_19.fwdbc_4.r2f.flags,
+
+revbc_20.fwdbc_1.r2f.flags,
+revbc_20.fwdbc_2.r2f.flags,
+revbc_20.fwdbc_3.r2f.flags,
+revbc_20.fwdbc_4.r2f.flags,
+
+revbc_21.fwdbc_1.r2f.flags,
+revbc_21.fwdbc_2.r2f.flags,
+revbc_21.fwdbc_3.r2f.flags,
+revbc_21.fwdbc_4.r2f.flags,
+
+revbc_22.fwdbc_1.r2f.flags,
+revbc_22.fwdbc_2.r2f.flags,
+revbc_22.fwdbc_3.r2f.flags,
+revbc_22.fwdbc_4.r2f.flags,
+
+revbc_23.fwdbc_1.r2f.flags,
+revbc_23.fwdbc_2.r2f.flags,
+revbc_23.fwdbc_3.r2f.flags,
+revbc_23.fwdbc_4.r2f.flags,
+
+revbc_24.fwdbc_1.r2f.flags,
+revbc_24.fwdbc_2.r2f.flags,
+revbc_24.fwdbc_3.r2f.flags,
+revbc_24.fwdbc_4.r2f.flags,
+
+revbc_25.fwdbc_1.r2f.flags,
+revbc_25.fwdbc_2.r2f.flags,
+revbc_25.fwdbc_3.r2f.flags,
+revbc_25.fwdbc_4.r2f.flags,
+
+revbc_26.fwdbc_1.r2f.flags,
+revbc_26.fwdbc_2.r2f.flags,
+revbc_26.fwdbc_3.r2f.flags,
+revbc_26.fwdbc_4.r2f.flags,
+
+revbc_27.fwdbc_1.r2f.flags,
+revbc_27.fwdbc_2.r2f.flags,
+revbc_27.fwdbc_3.r2f.flags,
+revbc_27.fwdbc_4.r2f.flags,
+
+revbc_28.fwdbc_1.r2f.flags,
+revbc_28.fwdbc_2.r2f.flags,
+revbc_28.fwdbc_3.r2f.flags,
+revbc_28.fwdbc_4.r2f.flags,
+
+revbc_29.fwdbc_1.r2f.flags,
+revbc_29.fwdbc_2.r2f.flags,
+revbc_29.fwdbc_3.r2f.flags,
+revbc_29.fwdbc_4.r2f.flags,
+
+revbc_30.fwdbc_1.r2f.flags,
+revbc_30.fwdbc_2.r2f.flags,
+revbc_30.fwdbc_3.r2f.flags,
+revbc_30.fwdbc_4.r2f.flags,
+ 
+revbc_1.fwdbc_1.r2.flags,
+revbc_1.fwdbc_2.r2.flags,
+revbc_1.fwdbc_3.r2.flags,
+revbc_1.fwdbc_4.r2.flags,
+
+revbc_2.fwdbc_1.r2.flags,
+revbc_2.fwdbc_2.r2.flags,
+revbc_2.fwdbc_3.r2.flags,
+revbc_2.fwdbc_4.r2.flags,
+
+revbc_3.fwdbc_1.r2.flags,
+revbc_3.fwdbc_2.r2.flags,
+revbc_3.fwdbc_3.r2.flags,
+revbc_3.fwdbc_4.r2.flags,
+
+revbc_4.fwdbc_1.r2.flags,
+revbc_4.fwdbc_2.r2.flags,
+revbc_4.fwdbc_3.r2.flags,
+revbc_4.fwdbc_4.r2.flags,
+
+revbc_5.fwdbc_1.r2.flags,
+revbc_5.fwdbc_2.r2.flags,
+revbc_5.fwdbc_3.r2.flags,
+revbc_5.fwdbc_4.r2.flags,
+
+revbc_6.fwdbc_1.r2.flags,
+revbc_6.fwdbc_2.r2.flags,
+revbc_6.fwdbc_3.r2.flags,
+revbc_6.fwdbc_4.r2.flags,
+
+revbc_7.fwdbc_1.r2.flags,
+revbc_7.fwdbc_2.r2.flags,
+revbc_7.fwdbc_3.r2.flags,
+revbc_7.fwdbc_4.r2.flags,
+
+revbc_8.fwdbc_1.r2.flags,
+revbc_8.fwdbc_2.r2.flags,
+revbc_8.fwdbc_3.r2.flags,
+revbc_8.fwdbc_4.r2.flags,
+
+revbc_9.fwdbc_1.r2.flags,
+revbc_9.fwdbc_2.r2.flags,
+revbc_9.fwdbc_3.r2.flags,
+revbc_9.fwdbc_4.r2.flags,
+
+revbc_10.fwdbc_1.r2.flags,
+revbc_10.fwdbc_2.r2.flags,
+revbc_10.fwdbc_3.r2.flags,
+revbc_10.fwdbc_4.r2.flags,
+
+revbc_11.fwdbc_1.r2.flags,
+revbc_11.fwdbc_2.r2.flags,
+revbc_11.fwdbc_3.r2.flags,
+revbc_11.fwdbc_4.r2.flags,
+
+revbc_12.fwdbc_1.r2.flags,
+revbc_12.fwdbc_2.r2.flags,
+revbc_12.fwdbc_3.r2.flags,
+revbc_12.fwdbc_4.r2.flags,
+
+revbc_13.fwdbc_1.r2.flags,
+revbc_13.fwdbc_2.r2.flags,
+revbc_13.fwdbc_3.r2.flags,
+revbc_13.fwdbc_4.r2.flags,
+
+revbc_14.fwdbc_1.r2.flags,
+revbc_14.fwdbc_2.r2.flags,
+revbc_14.fwdbc_3.r2.flags,
+revbc_14.fwdbc_4.r2.flags,
+
+revbc_15.fwdbc_1.r2.flags,
+revbc_15.fwdbc_2.r2.flags,
+revbc_15.fwdbc_3.r2.flags,
+revbc_15.fwdbc_4.r2.flags,
+
+
+revbc_16.fwdbc_1.r2.flags,
+revbc_16.fwdbc_2.r2.flags,
+revbc_16.fwdbc_3.r2.flags,
+revbc_16.fwdbc_4.r2.flags,
+
+revbc_17.fwdbc_1.r2.flags,
+revbc_17.fwdbc_2.r2.flags,
+revbc_17.fwdbc_3.r2.flags,
+revbc_17.fwdbc_4.r2.flags,
+
+revbc_18.fwdbc_1.r2.flags,
+revbc_18.fwdbc_2.r2.flags,
+revbc_18.fwdbc_3.r2.flags,
+revbc_18.fwdbc_4.r2.flags,
+
+revbc_19.fwdbc_1.r2.flags,
+revbc_19.fwdbc_2.r2.flags,
+revbc_19.fwdbc_3.r2.flags,
+revbc_19.fwdbc_4.r2.flags,
+
+revbc_20.fwdbc_1.r2.flags,
+revbc_20.fwdbc_2.r2.flags,
+revbc_20.fwdbc_3.r2.flags,
+revbc_20.fwdbc_4.r2.flags,
+
+
+revbc_21.fwdbc_1.r2.flags,
+revbc_21.fwdbc_2.r2.flags,
+revbc_21.fwdbc_3.r2.flags,
+revbc_21.fwdbc_4.r2.flags,
+
+revbc_22.fwdbc_1.r2.flags,
+revbc_22.fwdbc_2.r2.flags,
+revbc_22.fwdbc_3.r2.flags,
+revbc_22.fwdbc_4.r2.flags,
+
+revbc_23.fwdbc_1.r2.flags,
+revbc_23.fwdbc_2.r2.flags,
+revbc_23.fwdbc_3.r2.flags,
+revbc_23.fwdbc_4.r2.flags,
+
+revbc_24.fwdbc_1.r2.flags,
+revbc_24.fwdbc_2.r2.flags,
+revbc_24.fwdbc_3.r2.flags,
+revbc_24.fwdbc_4.r2.flags,
+
+revbc_25.fwdbc_1.r2.flags,
+revbc_25.fwdbc_2.r2.flags,
+revbc_25.fwdbc_3.r2.flags,
+revbc_25.fwdbc_4.r2.flags,
+
+revbc_26.fwdbc_1.r2.flags,
+revbc_26.fwdbc_2.r2.flags,
+revbc_26.fwdbc_3.r2.flags,
+revbc_26.fwdbc_4.r2.flags,
+ 
+revbc_27.fwdbc_1.r2.flags,
+revbc_27.fwdbc_2.r2.flags,
+revbc_27.fwdbc_3.r2.flags,
+revbc_27.fwdbc_4.r2.flags,
+
+revbc_28.fwdbc_1.r2.flags,
+revbc_28.fwdbc_2.r2.flags,
+revbc_28.fwdbc_3.r2.flags,
+revbc_28.fwdbc_4.r2.flags,
+
+revbc_29.fwdbc_1.r2.flags,
+revbc_29.fwdbc_2.r2.flags,
+revbc_29.fwdbc_3.r2.flags,
+revbc_29.fwdbc_4.r2.flags,
+
+revbc_30.fwdbc_1.r2.flags,
+revbc_30.fwdbc_2.r2.flags,
+revbc_30.fwdbc_3.r2.flags,
+revbc_30.fwdbc_4.r2.flags,
+
+fwdbc_1.rev_bc1.r1r.flags,
+fwdbc_1.rev_bc2.r1r.flags,
+fwdbc_1.rev_bc3.r1r.flags,
+fwdbc_1.rev_bc4.r1r.flags,
+fwdbc_1.rev_bc5.r1r.flags,
+fwdbc_1.rev_bc6.r1r.flags,
+fwdbc_1.rev_bc7.r1r.flags,
+fwdbc_1.rev_bc8.r1r.flags,
+fwdbc_1.rev_bc9.r1r.flags,
+fwdbc_1.rev_bc10.r1r.flags,
+
+fwdbc_1.rev_bc11.r1r.flags,
+fwdbc_1.rev_bc12.r1r.flags,
+fwdbc_1.rev_bc13.r1r.flags,
+fwdbc_1.rev_bc14.r1r.flags,
+fwdbc_1.rev_bc15.r1r.flags,
+fwdbc_1.rev_bc16.r1r.flags,
+fwdbc_1.rev_bc17.r1r.flags,
+fwdbc_1.rev_bc18.r1r.flags,
+fwdbc_1.rev_bc19.r1r.flags,
+fwdbc_1.rev_bc20.r1r.flags,
+
+fwdbc_1.rev_bc21.r1r.flags,
+fwdbc_1.rev_bc22.r1r.flags,
+fwdbc_1.rev_bc23.r1r.flags,
+fwdbc_1.rev_bc24.r1r.flags,
+fwdbc_1.rev_bc25.r1r.flags,
+fwdbc_1.rev_bc26.r1r.flags,
+fwdbc_1.rev_bc27.r1r.flags,
+fwdbc_1.rev_bc28.r1r.flags,
+fwdbc_1.rev_bc29.r1r.flags,
+fwdbc_1.rev_bc30.r1r.flags,
+
+fwdbc_2.rev_bc1.r1r.flags,
+fwdbc_2.rev_bc2.r1r.flags,
+fwdbc_2.rev_bc3.r1r.flags,
+fwdbc_2.rev_bc4.r1r.flags,
+fwdbc_2.rev_bc5.r1r.flags,
+fwdbc_2.rev_bc6.r1r.flags,
+fwdbc_2.rev_bc7.r1r.flags,
+fwdbc_2.rev_bc8.r1r.flags,
+fwdbc_2.rev_bc9.r1r.flags,
+fwdbc_2.rev_bc10.r1r.flags,
+
+fwdbc_2.rev_bc11.r1r.flags,
+fwdbc_2.rev_bc12.r1r.flags,
+fwdbc_2.rev_bc13.r1r.flags,
+fwdbc_2.rev_bc14.r1r.flags,
+fwdbc_2.rev_bc15.r1r.flags,
+fwdbc_2.rev_bc16.r1r.flags,
+fwdbc_2.rev_bc17.r1r.flags,
+fwdbc_2.rev_bc18.r1r.flags,
+fwdbc_2.rev_bc19.r1r.flags,
+fwdbc_2.rev_bc20.r1r.flags,
+
+fwdbc_2.rev_bc21.r1r.flags,
+fwdbc_2.rev_bc22.r1r.flags,
+fwdbc_2.rev_bc23.r1r.flags,
+fwdbc_2.rev_bc24.r1r.flags,
+fwdbc_2.rev_bc25.r1r.flags,
+fwdbc_2.rev_bc26.r1r.flags,
+fwdbc_2.rev_bc27.r1r.flags,
+fwdbc_2.rev_bc28.r1r.flags,
+fwdbc_2.rev_bc29.r1r.flags,
+fwdbc_2.rev_bc30.r1r.flags,
+
+fwdbc_3.rev_bc1.r1r.flags,
+fwdbc_3.rev_bc2.r1r.flags,
+fwdbc_3.rev_bc3.r1r.flags,
+fwdbc_3.rev_bc4.r1r.flags,
+fwdbc_3.rev_bc5.r1r.flags,
+fwdbc_3.rev_bc6.r1r.flags,
+fwdbc_3.rev_bc7.r1r.flags,
+fwdbc_3.rev_bc8.r1r.flags,
+fwdbc_3.rev_bc9.r1r.flags,
+fwdbc_3.rev_bc10.r1r.flags,
+
+fwdbc_3.rev_bc11.r1r.flags,
+fwdbc_3.rev_bc12.r1r.flags,
+fwdbc_3.rev_bc13.r1r.flags,
+fwdbc_3.rev_bc14.r1r.flags,
+fwdbc_3.rev_bc15.r1r.flags,
+fwdbc_3.rev_bc16.r1r.flags,
+fwdbc_3.rev_bc17.r1r.flags,
+fwdbc_3.rev_bc18.r1r.flags,
+fwdbc_3.rev_bc19.r1r.flags,
+fwdbc_3.rev_bc20.r1r.flags,
+
+fwdbc_3.rev_bc21.r1r.flags,
+fwdbc_3.rev_bc22.r1r.flags,
+fwdbc_3.rev_bc23.r1r.flags,
+fwdbc_3.rev_bc24.r1r.flags,
+fwdbc_3.rev_bc25.r1r.flags,
+fwdbc_3.rev_bc26.r1r.flags,
+fwdbc_3.rev_bc27.r1r.flags,
+fwdbc_3.rev_bc28.r1r.flags,
+fwdbc_3.rev_bc29.r1r.flags,
+fwdbc_3.rev_bc30.r1r.flags,
+
+fwdbc_4.rev_bc1.r1r.flags,
+fwdbc_4.rev_bc2.r1r.flags,
+fwdbc_4.rev_bc3.r1r.flags,
+fwdbc_4.rev_bc4.r1r.flags,
+fwdbc_4.rev_bc5.r1r.flags,
+fwdbc_4.rev_bc6.r1r.flags,
+fwdbc_4.rev_bc7.r1r.flags,
+fwdbc_4.rev_bc8.r1r.flags,
+fwdbc_4.rev_bc9.r1r.flags,
+fwdbc_4.rev_bc10.r1r.flags,
+
+fwdbc_4.rev_bc11.r1r.flags,
+fwdbc_4.rev_bc12.r1r.flags,
+fwdbc_4.rev_bc13.r1r.flags,
+fwdbc_4.rev_bc14.r1r.flags,
+fwdbc_4.rev_bc15.r1r.flags,
+fwdbc_4.rev_bc16.r1r.flags,
+fwdbc_4.rev_bc17.r1r.flags,
+fwdbc_4.rev_bc18.r1r.flags,
+fwdbc_4.rev_bc19.r1r.flags,
+fwdbc_4.rev_bc20.r1r.flags,
+
+fwdbc_4.rev_bc21.r1r.flags,
+fwdbc_4.rev_bc22.r1r.flags,
+fwdbc_4.rev_bc23.r1r.flags,
+fwdbc_4.rev_bc24.r1r.flags,
+fwdbc_4.rev_bc25.r1r.flags,
+fwdbc_4.rev_bc26.r1r.flags,
+fwdbc_4.rev_bc27.r1r.flags,
+fwdbc_4.rev_bc28.r1r.flags,
+fwdbc_4.rev_bc29.r1r.flags,
+fwdbc_4.rev_bc30.r1r.flags,
+"--minimum-length", 10,
+"--discard-untrimmed", "--report", "minimal",
+"-o",bccut_forward_reads_bac_helianthus[i], "-p",bccut_reverse_reads_bac_helianthus[i],
+polycut_forward_reads_bac_helianthus[i],polycut_reverse_reads_bac_helianthus[i]))
+}
+
+## **Step 3: Primer Removal**
+
+fwd1<-"GTGCCAGCMGCCGCGGTAA"
+fwd2<- "GTGCCAGCMGCWGCGGTAA"
+fwd3<- "GTGCCAGCMGCCGCGGTCA"
+fwd4<- "GTGKCAGCMGCCGCGGTAA"
+rev<- "GGACTACHVGGGTWTCTAAT"
+
+
+allorientations<-function(primer){       
+  require(Biostrings)     
+  dna<-DNAString(primer)                                                    
+  orientations<-c(Forward=dna, Complement=Biostrings::complement(dna),Reverse=Biostrings::reverse(dna), 
+             RevComp=Biostrings::reverseComplement(dna)) 
+  return(sapply(orientations,toString))
+}
+
+# Next we store all possible orientations of our primers in objects for each primer.
+fwd1.ori<-allorientations(fwd1)
+fwd2.ori<-allorientations(fwd2)
+fwd3.ori<-allorientations(fwd3)
+fwd4.ori<-allorientations(fwd4)
+rev.ori<-allorientations(rev)
+
+
+# We then identify occurences of the primers by creating a function called primeroccurences.This function will use the vcountPattern function which will return a vector containing the number of times a particular primer is detected in a sequence and the readFastq function which will take all fastq files in a particular director and turn them into a single object. 
+primeroccurences<-function(primer, directory) { 
+  nhits<-vcountPattern(primer, sread(readFastq(directory)),fixed=FALSE)
+  return(sum(nhits>0))
+}
+
+# Create a directory to store the forward and reverse reads after they have been trimmed.
+path_primercut_bac_helianthus<-file.path(helianthus_bac_path,"all_files_processed","primer_cutadapt_all_files_processed")
+if(!dir.exists(path_primercut_bac_helianthus)) dir.create(path_primercut_bac_helianthus)
+
+primercut_forward_reads_bac_helianthus<-file.path(path_primercut_bac_helianthus,paste0("primercut_",basename(forward_reads_bac_helianthus)))
+
+primercut_reverse_reads_bac_helianthus<-file.path(path_primercut_bac_helianthus,paste0("primercut_",basename(reverse_reads_bac_helianthus)))
+
+use_condaenv(condaenv="/Users/aarononfurak/anaconda3/envs/cutadaptenv/bin/python")
+system2("conda",args=c("run","-n","cutadaptenv","cutadapt --version"),stdout="")
+
+# We then create objects containing the forward and reverse primer reverse compliment strings. By using the :: syntax we are able to call a function stored in the dada2 package without having to load the whole dada2 package. In this case we will call the rc function of the dada2 package. The rc function takes a sequence object provided by the user and creates the reverse compliment of the sequence. 
+fwd.rc1<-dada2:::rc(fwd1)
+fwd.rc2<-dada2:::rc(fwd2)
+fwd.rc3<-dada2:::rc(fwd3)
+fwd.rc4<-dada2:::rc(fwd4) 
+rev.rc<-dada2:::rc(rev)
+
+# Using the paste function we then create objects that contain the flags for the potential combinations of each forward and reverse primer and the reverse compliment. These flags will serve as the argumentst that we provide to cutadapt. The ^ at the beginning of the sequence indicates that the primer should be removed from the beginning of the sequence. 
+fwd1.r1.flags<-paste("-a"," ", "^", fwd1,"...",rev.rc, sep='') 
+fwd2.r1.flags<-paste("-a"," ", "^", fwd2,"...",rev.rc, sep='') 
+fwd3.r1.flags<-paste("-a"," ", "^", fwd3,"...",rev.rc, sep='')
+fwd4.r1.flags<-paste("-a"," ", "^", fwd4,"...",rev.rc, sep='') 
+
+r1.fwd1.flags<-paste("-a"," ", "^", rev,"...",fwd.rc1, sep='')
+r1.fwd2.flags<-paste("-a"," ", "^", rev,"...",fwd.rc2, sep='')
+r1.fwd3.flags<-paste("-a"," ", "^", rev,"...",fwd.rc3, sep='')
+r1.fwd4.flags<-paste("-a"," ", "^", rev,"...",fwd.rc4, sep='')
+
+
+rev.fwd1.flags<-paste("-A"," ", "^", rev,"...",fwd.rc1, sep='')
+rev.fwd2.flags<-paste("-A"," ", "^", rev,"...",fwd.rc2, sep='')
+rev.fwd3.flags<-paste("-A"," ", "^", rev,"...",fwd.rc3, sep='')
+rev.fwd4.flags<-paste("-A"," ", "^", rev,"...",fwd.rc4, sep='')
+
+fwd1.rev.flags<-paste("-A"," ", "^", fwd1,"...",rev.rc, sep='')
+fwd2.rev.flags<-paste("-A"," ", "^", fwd2,"...",rev.rc, sep='')
+fwd3.rev.flags<-paste("-A"," ", "^", fwd3,"...",rev.rc, sep='')
+fwd4.rev.flags<-paste("-A"," ", "^", fwd4,"...",rev.rc, sep='')
+
+# We then use cutadapt to remove the primers from each read. Because we have twelve pairs of forward and reverse primers we instruct cutadapt to make 12 passes through the forward reads and twelve passes through the reverse reads for each possible primer pair using the -n 12 flag.
+
+for (i in seq_along(forward_reads_bac_helianthus)){
+  system2("conda",args=c("run","-n","cutadaptenv","cutadapt",fwd1.r1.flags,
+                          fwd2.r1.flags,
+                          fwd3.r1.flags,
+                          fwd4.r1.flags,
+                          r1.fwd1.flags,
+                          r1.fwd2.flags,
+                          r1.fwd3.flags,
+                          r1.fwd4.flags,
+                          rev.fwd1.flags,
+                          rev.fwd2.flags,
+                          rev.fwd3.flags,
+                          rev.fwd4.flags,
+                          fwd1.rev.flags,
+                          fwd2.rev.flags,
+                          fwd3.rev.flags,
+                          fwd4.rev.flags,
+                          "--discard-untrimmed", "--minimum-length",10,"--report","minimal",
+                          "-o",primercut_forward_reads_bac_helianthus[i], "-p",primercut_reverse_reads_bac_helianthus[i],
+                         bccut_forward_reads_bac_helianthus[i],bccut_reverse_reads_bac_helianthus[i]))
+}
+
+# Next we create two path objects that we will store the paths for our filtered forward and reverse reads. 
+filtered_forward_reads_bac_helianthus_01<-file.path(helianthus_bac_path,"all_files_processed","filtered_all_files_processed",paste0("filtered_",basename(forward_reads_bac_helianthus)))
+filtered_reverse_reads_bac_helianthus_01<-file.path(helianthus_bac_path,"all_files_processed","filtered_all_files_processed",paste0("filtered_",basename(reverse_reads_bac_helianthus)))
+
+
+# We then filter our forward and reverse reads using the filterAndTrim function. 
+filterAndTrim(primercut_forward_reads_bac_helianthus,filtered_forward_reads_bac_helianthus_01,primercut_reverse_reads_bac_helianthus,filtered_reverse_reads_bac_helianthus_01,maxEE=c(2,2),multithread = FALSE,rm.phix = TRUE)
+
+filtered_forward_reads_bac_helianthus<-filtered_forward_reads_bac_helianthus_01[grep("filtered_Negative_b.raw_1",filtered_forward_reads_bac_helianthus_01,invert = TRUE)]
+filtered_reverse_reads_bac_helianthus<-filtered_reverse_reads_bac_helianthus_01[grep("filtered_Negative_b.raw_2",filtered_reverse_reads_bac_helianthus_01,invert=TRUE)]
+
+
+quality_plot_primer_cut_filter_fwd<-plotQualityProfile(filtered_forward_reads_bac_helianthus,aggregate=TRUE)
+quality_plot_primer_cut_filter_fwd
+quality_plot_primer_cut_filter_rev<-plotQualityProfile(filtered_reverse_reads_bac_helianthus,aggregate=TRUE)
+quality_plot_primer_cut_filter_rev
+
+# dereplication(merging identical reads into single sequences)
+derepforward_bac_helianthus<-derepFastq(filtered_forward_reads_bac_helianthus,verbose=TRUE,n = 1e4)
+derepreverse_bac_helianthus<-derepFastq(filtered_reverse_reads_bac_helianthus,verbose=TRUE,n = 1e4)
+```
+
+# This section of the analyses was run on a server due to its high memory requirements.
+```{r}
+# Next we create two path objects that we will store the paths for our filtered forward and reverse reads. 
+filtered_forward_reads_its_helianthus<-list.files("/sphinx_local/projects/michelle/helianthus/cultureindependent_data/raw_data/fungi/05_2024_sequence_processing/05_2024_trimmed_v4_files",pattern="r1.fq.gz|.raw_1.fq.gz",full.names = TRUE)
+filtered_reverse_reads_its_helianthus<-list.files("/sphinx_local/projects/michelle/helianthus/cultureindependent_data/raw_data/fungi/05_2024_sequence_processing/05_2024_trimmed_v4_files",pattern="r2.fq.gz|.raw_2.fq.gz",full.names = T)
+length(filtered_forward_reads_its_helianthus)
+length(filtered_reverse_reads_its_helianthus)
+
+# Learning errors for forward and reverse reads
+
+error_forward_reads_its_helianthus<-learnErrors(filtered_forward_reads_its_helianthus,multithread = 20)
+error_reverse_reads_its_helianthus<-learnErrors(filtered_reverse_reads_its_helianthus,multithread=20)
+
+plotErrors(error_forward_reads_its_helianthus,nominalQ = TRUE)
+plotErrors(error_reverse_reads_its_helianthus,nominalQ = TRUE)
+
+dada_forward_reads_its_helianthus<-dada(filtered_forward_reads_its_helianthus,err=error_forward_reads_its_helianthus,pool="pseudo",multithread = 20)
+
+dada_reverse_reads_its_helianthus<-dada(filtered_reverse_reads_its_helianthus,err=error_reverse_reads_its_helianthus,pool="pseudo",multithread = 20)
+
+# First forward and reverse reads are merged using mergePairs. 
+merge_its_helianthus<-mergePairs(dada_forward_reads_its_helianthus,filtered_forward_reads_its_helianthus,dada_reverse_reads_its_helianthus,filtered_reverse_reads_its_helianthus,verbose=TRUE,maxMismatch = 0)
+
+
+# We then create a sequence table
+seqtab_its_helianthus<-makeSequenceTable(merge_its_helianthus)
+
+
+# Inspect distribution of sequence lengths
+table(nchar(getSequences(seqtab_its_helianthus)))
+
+# We then remove chimeras using the removeBimeraDenovo function. WRITE TABLE
+seqtab_nochim_its_helianthus<-removeBimeraDenovo(seqtab_its_helianthus,method="consensus", multithread=TRUE, verbose=TRUE)
+write.csv(seqtab_nochim_its_helianthus, "seqtab_nochim_16_helianthus.csv", row.names=TRUE)
+```
+
+    
