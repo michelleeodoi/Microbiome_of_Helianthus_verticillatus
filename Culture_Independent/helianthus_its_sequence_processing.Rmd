@@ -1,6 +1,6 @@
 ---
 title: "helianthus_ITS_sequence_processing"
-author: "Aaron Onufrak"
+author: "Michelle Odoi and Aaron Onufrak"
 date: "2023-11-10"
 output: html_document
 editor_options: 
