@@ -1,5 +1,5 @@
 ---
-title: "helianthus_its_processsed"
+title: "helianthus_ITS_sequence_processing"
 author: "Aaron Onufrak"
 date: "2023-11-10"
 output: html_document
