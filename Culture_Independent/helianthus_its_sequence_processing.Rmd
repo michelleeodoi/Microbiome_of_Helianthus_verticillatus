@@ -2029,7 +2029,7 @@ for (i in seq_along(forward_reads_its_helianthus)){
 filtered_forward_reads_its_helianthus<-file.path(helianthus_its_path,"all_files_processed","filtered_all_files_processed",paste0("filtered_",basename(forward_reads_its_helianthus)))
 filtered_reverse_reads_its_helianthus<-file.path(helianthus_its_path,"all_files_processed","filtered_all_files_processed",paste0("filtered_",basename(reverse_reads_its_helianthus)))
 
-# We then filter our forward and reverse reads using the filterAndTrim function. Specifying maxN=0 will indicate that sequences with at least 1 ambiguous base will be removed from the dataset. 
+# We then filter our forward and reverse reads using the filterAndTrim function.
 filterAndTrim(primercut_forward_reads_its_helianthus,filtered_forward_reads_its_helianthus,primercut_reverse_reads_its_helianthus,filtered_reverse_reads_its_helianthus,maxEE=c(2,2))
 
 quality_plot_primer_cut_filter_fwd<-plotQualityProfile(filtered_forward_reads_its_helianthus,aggregate=TRUE)
@@ -2040,18 +2040,7 @@ quality_plot_primer_cut_filter_rev
 # dereplication(merging identical reads into single sequences)
 derepforward_its_helianthus<-derepFastq(filtered_forward_reads_its_helianthus,verbose=TRUE,n = 1e4)
 derepreverse_its_helianthus<-derepFastq(filtered_reverse_reads_its_helianthus,verbose=TRUE,n = 1e4)
-
-# Learning errors for forward and reverse reads. 
-errorforward_its_helianthus<-learnErrors(derepforward_its_helianthus, multithread = FALSE,nbases = 1E8)
-errorreverse_its_helianthus<-learnErrors(derepreverse_its_helianthus,multithread = FALSE,nbases=1E8)
-
-# Error plots for forward & reverse reads
-errplots_fwd_its_helianthus<-plotErrors(errorforward_its_helianthus, nominalQ=TRUE)
-errplots_fwd_its_helianthus
-errplots_rev_its_helianthus<-plotErrors(errorreverse_its_helianthus,nominalQ = TRUE)
-errplots_rev_its_helianthus
 ```
-
 
 # This section of the analyses was run on a server due to its high memory requirements.
 ```{r}
