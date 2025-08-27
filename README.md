@@ -1,4 +1,5 @@
 # Microbiome_of_Helianthus_verticillatus
+This repository contains drop-down menus for the project description and two directories containing scripts and figures related to culture-dependent and culture-independent aspects of the study.
 <details>
 <summary>Project Title</summary>
 Local variation in the microbiome of the endangered ornamental sunflower <em>Helianthus verticillatus</em> across three urban landscapes
@@ -10,15 +11,15 @@ Evaluate local geographical variation in the composition of <em>Helianthus verti
 <details>
 <summary>Project Objectives</summary>
  <ol>
- <li> Using a combination of culture-dependent and culture-independent (e.g., amplicon sequencing or metabarcoding) techniques, we characterized the fungal and bacterial/archaeal communities of  <em>H. verticillatus</em> flower buds, leaves, rhizomes, roots, and bulk soils.</li>
- <li> We used a combination of culture-dependent and culture-independent approaches to increase the likelihood of capturing a greater diversity of foliar <em> H. verticillatus</em> microbial associates across the three sites, since foliar fungal diseases are the most frequently recorded in <em>H. verticillatus</em>.</li>
-<li> We then determined how differences in soil physicochemical properties between sites drove variation in the composition of belowground (i.e., rhizomes, roots, and bulk soils) microbial communities.</li>
-<li> We characterized the flower bud microbiome, which has been relatively understudied compared to other plant-associated niches <a href="https://journals.asm.org/doi/full/10.1128/mbio.00602-12">Shade et al. 2013</a>, to gain insights into the composition of microbial communities associated with the reproduction and conservation of endangered species <a href="https://cdnsciencepub.com/doi/10.1139/cjb-2013-0166"> Aleklett et al. 20214</a>, <a href="https://www.annualreviews.org/content/journals/10.1146/annurev-ecolsys-011720-013401">Vannette, 2020 </a>.
+ <li> Using a combination of culture-dependent and culture-independent approaches (i.e., amplicon sequencing or metabarcoding), we characterized the fungal and bacterial/archaeal communities associated with  <em>H. verticillatus</em> flower buds, leaves, rhizomes, roots, and bulk soils.</li>
+ <li> We used a combination of culture-dependent and culture-independent approaches to capture a greater diversity of fungal communities associated with the foliage of <em> H. verticillatus</em> across the three sites, since foliar fungal diseases are the most frequently recorded in <em>H. verticillatus</em>.</li>
+<li> Determined how differences in soil physicochemical properties among sites shape variation in the composition of belowground (i.e., rhizomes, roots, and bulk soils) microbial communities.</li>
+<li> Characterized the flower bud microbiome, which has been relatively understudied compared to other plant-associated niches <a href="https://journals.asm.org/doi/full/10.1128/mbio.00602-12">Shade et al. 2013</a>, to gain insights into the composition of microbial communities associated with the reproduction and conservation of endangered species <a href="https://cdnsciencepub.com/doi/10.1139/cjb-2013-0166"> Aleklett et al. 20214</a>, <a href="https://www.annualreviews.org/content/journals/10.1146/annurev-ecolsys-011720-013401">Vannette, 2020 </a>.
 </li>
 </details>
 <details>
 <summary>Hypothesis</summary>
-We hypothesized that <em> H. verticillatus</em> -associated microbiota would vary across sites and niches and that soil physicochemical properties, such as soil pH, would be primary drivers of variation in belowground microbial community composition
+ <em> H. verticillatus</em> -associated microbiota would vary across sites and niches. Additionally, soil physicochemical properties, such as soil pH, would be primary drivers of variation in belowground microbial community composition
 </details>
 
 
